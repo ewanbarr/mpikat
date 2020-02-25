@@ -858,8 +858,8 @@ class FbfProductController(object):
                 epoch = float(tiling.get('epoch', time.time()))
                 self.add_tiling(target, nbeams, freq, overlap, epoch)
             self._parent.ioloop.add_callback(
-                lambda: wait_for_track(
-                    lambda: self._cbc_data_suspect.set_value(False)))
+                wait_for_track,
+                lambda: self._cbc_data_suspect.set_value(False))
 
         # Here we interrupt any active wait_for_track coroutines
         self._activity_tracker_interrupt.set()
@@ -890,8 +890,8 @@ class FbfProductController(object):
         sensor.register_listener(ca_target_update_callback)
         self._ca_client.set_sampling_strategy(sensor.name, "event")
         self._parent.ioloop.add_callback(
-            lambda: wait_for_track(
-                lambda: self._ibc_data_suspect.set_value(False)))
+            wait_for_track,
+            lambda: self._ibc_data_suspect.set_value(False))
 
     def _beam_to_sensor_string(self, beam):
         return beam.target.format_katcp()
@@ -927,11 +927,16 @@ class FbfProductController(object):
             self.add_sensor(sensor)
         self._parent.mass_inform(Message.inform('interface-changed'))
 
+    @coroutine
     def _make_beam_plot(self, target):
-        png = self._beam_manager.generate_psf_png(
-            target,
-            self._cfreq_sensor.value(), time.time())
-        self._psf_png_sensor.set_value(base64.b64encode(png))
+        try:
+            png = self._beam_manager.generate_psf_png(
+                target,
+                self._cfreq_sensor.value(), time.time())
+            self._psf_png_sensor.set_value(base64.b64encode(png))
+        except Exception as error:
+            log.exception("Unable to generate beamshape image: {}".format(
+                error))
 
     @coroutine
     def target_start(self, target):
@@ -940,13 +945,10 @@ class FbfProductController(object):
         self._phase_reference_sensor.set_value(target.format_katcp())
         self._delay_config_server._phase_reference_sensor.set_value(
             target.format_katcp())
-        try:
-            self._make_beam_plot(target)
-        except Exception as error:
-            log.exception("Unable to generate beamshape image: {}".format(
-                error))
+        self._parent.ioloop.add_callback(self._make_beam_plot, target)
         if self._ca_client:
-            yield self.get_ca_target_configuration(target)
+            self._parent.ioloop.add_callback(
+                self.get_ca_target_configuration, target)
         else:
             self.log.warning("No configuration authority is set, "
                              "using default beam configuration")
@@ -1183,6 +1185,8 @@ class FbfProductController(object):
             sensor_name = "{}_beam_position_configuration".format(
                 self._product_id)
             self._ca_client.set_sampling_strategy(sensor_name, "none")
+        self._ibc_data_suspect.set_value(True)
+        self._cbc_data_suspect.set_value(True)
 
     def add_beam(self, target):
         """
@@ -1226,7 +1230,8 @@ class FbfProductController(object):
             tiling.generate(epoch)
         except Exception as error:
             self.log.exception(
-                "Failed to generate tiling pattern with error: {}".format(str(error)))
+                "Failed to generate tiling pattern with error: {}".format(
+                    str(error)))
         return tiling
 
     def reset_beams(self):

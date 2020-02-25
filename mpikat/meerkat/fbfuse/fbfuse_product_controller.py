@@ -569,9 +569,9 @@ class FbfProductController(object):
     def get_ca_sb_configuration(self, sb_id):
         self.log.debug(("Retrieving schedule block configuration"
                         " from configuration authority"))
-        yield self._ca_client.until_synced(timeout=20.0)
+        yield self._ca_client.until_synced(timeout=30.0)
         try:
-            response = yield self._ca_client.req.get_schedule_block_configuration(self._product_id, sb_id, self._n_channels)
+            response = yield self._ca_client.req.get_schedule_block_configuration(self._product_id, sb_id, self._n_channels, timeout=30.0)
         except Exception as error:
             self.log.error(
                 "Request for SB configuration to CA failed with error: {}".format(str(error)))

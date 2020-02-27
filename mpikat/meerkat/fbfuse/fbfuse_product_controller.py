@@ -27,12 +27,15 @@ import struct
 import base64
 from copy import deepcopy
 from tornado.gen import coroutine, Return
+from tornado.locks import Event
 from katcp import Sensor, Message, KATCPClientResource
 from katpoint import Target, Antenna
 from mpikat.core.ip_manager import ip_range_from_stream
 from mpikat.core.utils import parse_csv_antennas, LoggingSensor
+from mpikat.meerkat.katportalclient_wrapper import SubarrayActivityInterrupt
 from mpikat.meerkat.fbfuse import (
     BeamManager,
+    BeamAllocationError,
     DelayConfigurationServer,
     FbfConfigurationManager)
 
@@ -59,7 +62,8 @@ class FbfProductController(object):
     IDLE, PREPARING, READY, STARTING, CAPTURING, STOPPING, ERROR = STATES
 
     def __init__(self, parent, product_id, katpoint_antennas,
-                 n_channels, feng_streams, proxy_name, feng_config):
+                 n_channels, feng_streams, proxy_name, feng_config,
+                 subarray_activity_tracker):
         """
         @brief      Construct new instance
 
@@ -98,8 +102,11 @@ class FbfProductController(object):
         self._beam_manager = None
         self._delay_config_server = None
         self._ca_client = None
+        self._activity_tracker_interrupt = Event()
+        self._activity_tracker = subarray_activity_tracker
         self._previous_sb_config = None
         self._managed_sensors = []
+        self._beam_sensors = []
         self._ibc_mcast_group = None
         self._cbc_mcast_groups = None
         self._current_configuration = None
@@ -264,6 +271,28 @@ class FbfProductController(object):
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._cbc_fscrunch_sensor)
 
+        self._cbc_nchans_per_partition_sensor = Sensor.integer(
+            "coherent-beam-subband-nchans",
+            description="The output number of frequency channels per partition for coherent beam data",
+            default=0,
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._cbc_nchans_per_partition_sensor)
+
+        self._cbc_samples_per_heap_sensor = Sensor.integer(
+            "coherent-beam-samples-per-heap",
+            description="The output number of time samples per coherent beam heap",
+            default=0,
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._cbc_samples_per_heap_sensor)
+
+        self._cbc_tsamp_sensor = Sensor.float(
+            "coherent-beam-time-resolution",
+            description="The time resolution of output coherent beam data",
+            default=0.0,
+            unit="s",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._cbc_tsamp_sensor)
+
         self._cbc_antennas_sensor = Sensor.string(
             "coherent-beam-antennas",
             description="The antennas that will be used when producing coherent beams",
@@ -293,6 +322,28 @@ class FbfProductController(object):
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._cbc_mcast_group_data_rate_sensor)
 
+        self._cbc_heap_size_sensor = Sensor.integer(
+            "coherent-beam-heap-size",
+            description="The coherent beam heap size in bytes",
+            default=8192,
+            unit="bytes",
+            initial_status=Sensor.NOMINAL)
+        self.add_sensor(self._cbc_heap_size_sensor)
+
+        self._cbc_idx1_step_sensor = Sensor.integer(
+            "coherent-beam-idx1-step",
+            description="The timestamp step between successive heap groups in coherent beam output data",
+            default=0,
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._cbc_idx1_step_sensor)
+
+        self._cbc_data_suspect = Sensor.boolean(
+            "coherent-beam-data-suspect",
+            description="Indicates when data from the coherent beam is expected to be invalid",
+            default=True,
+            initial_status=Sensor.NOMINAL)
+        self.add_sensor(self._cbc_data_suspect)
+
         self._ibc_nbeams_sensor = Sensor.integer(
             "incoherent-beam-count",
             description="The number of incoherent beams that this FBF instance can currently produce",
@@ -313,6 +364,28 @@ class FbfProductController(object):
             default=self._default_sb_config['incoherent-beam-fscrunch'],
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._ibc_fscrunch_sensor)
+
+        self._ibc_nchans_per_partition_sensor = Sensor.integer(
+            "incoherent-beam-subband-nchans",
+            description="The output number of frequency channels per partition for incoherent beam data",
+            default=0,
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._ibc_nchans_per_partition_sensor)
+
+        self._ibc_samples_per_heap_sensor = Sensor.integer(
+            "incoherent-beam-samples-per-heap",
+            description="The output number of time samples per incoherent beam heap",
+            default=0,
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._ibc_samples_per_heap_sensor)
+
+        self._ibc_tsamp_sensor = Sensor.float(
+            "incoherent-beam-time-resolution",
+            description="The time resolution of output incoherent beam data",
+            default=0.0,
+            unit="s",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._ibc_tsamp_sensor)
 
         self._ibc_antennas_sensor = Sensor.string(
             "incoherent-beam-antennas",
@@ -335,6 +408,28 @@ class FbfProductController(object):
             unit="bits/s",
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._ibc_mcast_group_data_rate_sensor)
+
+        self._ibc_heap_size_sensor = Sensor.integer(
+            "incoherent-beam-heap-size",
+            description="The incoherent beam heap size in bytes",
+            default=8192,
+            unit="bytes",
+            initial_status=Sensor.NOMINAL)
+        self.add_sensor(self._ibc_heap_size_sensor)
+
+        self._ibc_idx1_step_sensor = Sensor.integer(
+            "incoherent-beam-idx1-step",
+            description="The timestamp step between successive heap groups in incoherent beam output data",
+            default=0,
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._ibc_idx1_step_sensor)
+
+        self._ibc_data_suspect = Sensor.boolean(
+            "incoherent-beam-data-suspect",
+            description="Indicates when data from the incoherent beam is expected to be invalid",
+            default=True,
+            initial_status=Sensor.NOMINAL)
+        self.add_sensor(self._ibc_data_suspect)
 
         self._servers_sensor = Sensor.string(
             "servers",
@@ -371,7 +466,6 @@ class FbfProductController(object):
             default="",
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._psf_png_sensor)
-
         self._parent.mass_inform(Message.inform('interface-changed'))
 
     def teardown_sensors(self):
@@ -384,6 +478,17 @@ class FbfProductController(object):
         for sensor in self._managed_sensors:
             self._parent.remove_sensor(sensor)
         self._managed_sensors = []
+        self._parent.mass_inform(Message.inform('interface-changed'))
+
+    def teardown_beam_sensors(self):
+        """
+        @brief    Remove all beam sensors created by this product from the parent server.
+
+        """
+        for sensor in self._beam_sensors:
+            self._parent.remove_sensor(sensor)
+            self._managed_sensors.remove(sensor)
+        self._beam_sensors = []
         self._parent.mass_inform(Message.inform('interface-changed'))
 
     @property
@@ -434,6 +539,12 @@ class FbfProductController(object):
         return requested_antennas.issubset(antennas_set)
 
     def set_configuration_authority(self, hostname, port):
+        """
+        @brief      Set the CA for the product
+
+        @param   hostname   The hostname or IP for the CA
+        @param   port       The port the CA serves on
+        """
         if self._ca_client:
             self._ca_client.stop()
         self._ca_client = KATCPClientResource(dict(
@@ -444,12 +555,23 @@ class FbfProductController(object):
         self._ca_address_sensor.set_value("{}:{}".format(hostname, port))
 
     @coroutine
+    def get_sb_configuration(self, sb_id):
+        if self._ca_client:
+            config = yield self.get_ca_sb_configuration(sb_id)
+        else:
+            self.log.warning(
+                "No configuration authority found, "
+                "using default configuration parameters")
+            config = self._default_sb_config
+        raise Return(config)
+
+    @coroutine
     def get_ca_sb_configuration(self, sb_id):
-        self.log.debug(
-            "Retrieving schedule block configuration from configuration authority")
-        yield self._ca_client.until_synced()
+        self.log.debug(("Retrieving schedule block configuration"
+                        " from configuration authority"))
+        yield self._ca_client.until_synced(timeout=20.0)
         try:
-            response = yield self._ca_client.req.get_schedule_block_configuration(self._proxy_name, sb_id)
+            response = yield self._ca_client.req.get_schedule_block_configuration(self._product_id, sb_id, self._n_channels)
         except Exception as error:
             self.log.error(
                 "Request for SB configuration to CA failed with error: {}".format(str(error)))
@@ -467,11 +589,13 @@ class FbfProductController(object):
     @coroutine
     def reset_sb_configuration(self):
         self.log.debug("Reseting schedule block configuration")
+        self._previous_sb_config = None
         try:
             self.capture_stop()
         except Exception as error:
             self.log.warning(
-                "Received error while attempting capture stop: {}".format(str(error)))
+                "Received error while attempting capture stop: {}".format(
+                    str(error)))
         futures = []
         for server in self._servers:
             futures.append(server.deconfigure(timeout=30.0))
@@ -497,6 +621,8 @@ class FbfProductController(object):
         try:
             self._parent._feng_subscription_manager.unsubscribe(
                 self._product_id)
+        except KeyError:
+            pass
         except Exception as error:
             log.warning("Could not unsubscribe F-eng mappings: {}".format(
                 str(error)))
@@ -506,8 +632,19 @@ class FbfProductController(object):
         yield self.reset_sb_configuration()
         self._state_sensor.set_value(self.ERROR)
 
-    def _sanitise_coh_beam_ants(self, coherent_beam_antennas):
-        antennas = parse_csv_antennas(coherent_beam_antennas)
+    def _get_valid_antennas(self, antennas):
+        antennas_set = set(antennas)
+        subarray_set = set([ant.name for ant in self._katpoint_antennas])
+        valid_set = subarray_set.intersection(antennas_set)
+        diff_set = antennas_set.difference(valid_set)
+        if len(diff_set) > 0:
+            log.warning("Not all requested antennas available in subarray.")
+            log.warning("Dropping antennas: {}".format(list(diff_set)))
+        return sorted(list(valid_set))
+
+    def _sanitise_coh_beam_ants(self, requested_antennas):
+        antennas = self._get_valid_antennas(
+            parse_csv_antennas(requested_antennas))
         remainder = len(antennas) % COH_ANTENNA_GRANULARITY
         if remainder != 0:
             log.warning(
@@ -518,9 +655,18 @@ class FbfProductController(object):
                 "Dropping antennas {} from the coherent beam".format(
                     antennas[-remainder:])
                 )
-            return ",".join(antennas[:len(antennas) - remainder])
-        else:
-            return coherent_beam_antennas
+            antennas = antennas[:len(antennas) - remainder]
+        if len(antennas) == 0:
+            raise Exception("After sanitising coherent beam antennas, "
+                            "no valid antennas remain")
+        log.info("Sanitised coherent antennas: {}".format(antennas))
+        return ",".join(antennas)
+
+    def _sanitise_incoh_beam_ants(self, requested_antennas):
+        antennas = self._get_valid_antennas(
+            parse_csv_antennas(requested_antennas))
+        log.info("Sanitised incoherent antennas: {}".format(antennas))
+        return ",".join(antennas)
 
     @coroutine
     def set_sb_configuration(self, config_dict):
@@ -565,30 +711,25 @@ class FbfProductController(object):
                 they must subscribe to the same multicast group 4 times on different nodes.
 
         """
-        if self._previous_sb_config == config_dict:
-            self.log.info(
-                "Configuration is unchanged, proceeding with existing configuration")
-            raise Return(self._current_configuration)
-        else:
-            self._previous_sb_config = config_dict
-        yield self.reset_sb_configuration()
         self.log.info("Setting schedule block configuration")
         config = deepcopy(self._default_sb_config)
         config.update(config_dict)
         self.log.info("Configuring using: {}".format(config))
         config['coherent-beams-antennas'] = self._sanitise_coh_beam_ants(
             config['coherent-beams-antennas'])
+        config['incoherent-beam-antennas'] = self._sanitise_incoh_beam_ants(
+            config['incoherent-beam-antennas'])
         requested_cbc_antenna = parse_csv_antennas(
             config['coherent-beams-antennas'])
         requested_nantennas = len(requested_cbc_antenna)
         if not self._verify_antennas(requested_cbc_antenna):
-            raise Exception(
-                "Requested coherent beam antennas are not a subset of the available antennas")
+            raise Exception("Requested coherent beam antennas are not a "
+                            "subset of the available antennas")
         requested_ibc_antenna = parse_csv_antennas(
             config['incoherent-beam-antennas'])
         if not self._verify_antennas(requested_ibc_antenna):
-            raise Exception(
-                "Requested incoherent beam antennas are not a subset of the available antennas")
+            raise Exception("Requested incoherent beam antennas are not a"
+                            " subset of the available antennas")
         # first we need to get one ip address for the incoherent beam
         self._ibc_mcast_group = self._parent._ip_pool.allocate(1)
         self._ibc_mcast_group_sensor.set_value(
@@ -622,6 +763,38 @@ class FbfProductController(object):
         self._ibc_tscrunch_sensor.set_value(config['incoherent-beam-tscrunch'])
         self._ibc_fscrunch_sensor.set_value(config['incoherent-beam-fscrunch'])
         self._ibc_antennas_sensor.set_value(config['incoherent-beam-antennas'])
+
+        # Below are some convenience calculations
+        coh_heap_size = 8192
+        nsamps_per_coh_heap = (coh_heap_size / (cm.nchans_per_worker
+                               * config['coherent-beams-fscrunch']))
+        coh_timestamp_step = (config['coherent-beams-tscrunch']
+                              * nsamps_per_coh_heap
+                              * 2 * self._n_channels)
+        coh_tsamp = (config['coherent-beams-tscrunch'] * self._n_channels
+                     / self._feng_config['bandwidth'])
+        self._cbc_nchans_per_partition_sensor.set_value(
+            cm.nchans_per_worker / config['coherent-beams-fscrunch'])
+        self._cbc_samples_per_heap_sensor.set_value(nsamps_per_coh_heap)
+        self._cbc_tsamp_sensor.set_value(coh_tsamp)
+        self._cbc_heap_size_sensor.set_value(coh_heap_size)
+        self._cbc_idx1_step_sensor.set_value(coh_timestamp_step)
+
+        incoh_heap_size = 8192
+        nsamps_per_incoh_heap = (incoh_heap_size / (cm.nchans_per_worker
+                                 * config['incoherent-beam-fscrunch']))
+        incoh_timestamp_step = (config['incoherent-beam-tscrunch']
+                                * nsamps_per_incoh_heap
+                                * 2 * self._n_channels)
+        incoh_tsamp = (config['incoherent-beam-tscrunch'] * self._n_channels
+                       / self._feng_config['bandwidth'])
+        self._ibc_nchans_per_partition_sensor.set_value(
+            cm.nchans_per_worker / config['incoherent-beam-fscrunch'])
+        self._ibc_samples_per_heap_sensor.set_value(nsamps_per_incoh_heap)
+        self._ibc_tsamp_sensor.set_value(incoh_tsamp)
+        self._ibc_heap_size_sensor.set_value(incoh_heap_size)
+        self._ibc_idx1_step_sensor.set_value(incoh_timestamp_step)
+
         # This doesn't really belong here
         ibc_group_rate = (
             mcast_config['used_bandwidth'] / config['incoherent-beam-tscrunch']
@@ -646,15 +819,36 @@ class FbfProductController(object):
 
     @coroutine
     def get_ca_target_configuration(self, boresight_target):
+
+        @coroutine
+        def wait_for_track(callback):
+            self.log.debug("Waiting for subarray to enter 'track' state")
+            try:
+                yield self._activity_tracker.wait_until(
+                    "track", self._activity_tracker_interrupt)
+            except SubarrayActivityInterrupt:
+                self.log.debug("Interrupting callback waiting on 'track' state")
+                pass
+            except Exception as error:
+                log.error(
+                    "Unknown error while waiting on telescope to enter 'track' state: {}".format(
+                        str(error)))
+            else:
+                callback()
+
         def ca_target_update_callback(received_timestamp, timestamp, status,
                                       value):
             # TODO, should we really reset all the beams or should we have
             # a mechanism to only update changed beams
             config_dict = json.loads(value)
+            self._cbc_data_suspect.set_value(True)
             self.reset_beams()
             for target_string in config_dict.get('beams', []):
                 target = Target(target_string)
-                self.add_beam(target)
+                try:
+                    self.add_beam(target)
+                except BeamAllocationError as error:
+                    log.warning(str(error))
             for tiling in config_dict.get('tilings', []):
                 target = Target(tiling['target'])  # required
                 freq = float(tiling.get('reference_frequency',
@@ -663,15 +857,21 @@ class FbfProductController(object):
                 overlap = float(tiling.get('overlap', 0.5))
                 epoch = float(tiling.get('epoch', time.time()))
                 self.add_tiling(target, nbeams, freq, overlap, epoch)
+            self._parent.ioloop.add_callback(
+                wait_for_track,
+                lambda: self._cbc_data_suspect.set_value(False))
+
+        # Here we interrupt any active wait_for_track coroutines
+        self._activity_tracker_interrupt.set()
+
         # Here we generate a plot from the PSF
-        png = self._beam_manager.generate_psf_png(
-            boresight_target, self._katpoint_antennas,
-            self._cfreq_sensor.value(), time.time())
-        self._psf_png_sensor.set_value(base64.b64encode(png))
-        yield self._ca_client.until_synced()
+        yield self._ca_client.until_synced(timeout=10.0)
+        sensor_name = "{}_beam_position_configuration".format(self._product_id)
+        if sensor_name in self._ca_client.sensor:
+            self._ca_client.sensor[sensor_name].clear_listeners()
         try:
             response = yield self._ca_client.req.target_configuration_start(
-                self._proxy_name, boresight_target.format_katcp())
+                self._product_id, boresight_target.format_katcp())
         except Exception as error:
             self.log.error(("Request for target configuration to CA "
                             "failed with error: {}").format(str(error)))
@@ -681,79 +881,25 @@ class FbfProductController(object):
             self.log.error(("Request for target configuration to CA "
                             "failed with error: {}").format(str(error)))
             raise error
-        yield self._ca_client.until_synced()
-        sensor = self._ca_client.sensor[
-            "{}_beam_position_configuration".format(self._proxy_name)]
+        yield self._ca_client.until_synced(timeout=10.0)
+
+        # Clear the state on the interrupt event for wait_for_track coroutines
+        self._activity_tracker_interrupt.clear()
+
+        sensor = self._ca_client.sensor[sensor_name]
         sensor.register_listener(ca_target_update_callback)
         self._ca_client.set_sampling_strategy(sensor.name, "event")
+        self._parent.ioloop.add_callback(
+            wait_for_track,
+            lambda: self._ibc_data_suspect.set_value(False))
 
     def _beam_to_sensor_string(self, beam):
         return beam.target.format_katcp()
 
-    @coroutine
-    def target_start(self, target):
-        self._phase_reference_sensor.set_value(target.format_katcp())
-        self._delay_config_server._phase_reference_sensor.set_value(target.format_katcp())
-        if self._ca_client:
-            yield self.get_ca_target_configuration(target)
-        else:
-            self.log.warning("No configuration authority is set, "
-                             "using default beam configuration")
-
-    @coroutine
-    def target_stop(self):
-        if self._ca_client:
-            sensor_name = "{}_beam_position_configuration".format(
-                self._proxy_name)
-            self._ca_client.set_sampling_strategy(sensor_name, "none")
-
-    @coroutine
-    def prepare(self, sb_id):
-        """
-        @brief      Prepare the beamformer for streaming
-
-        @detail     This method evaluates the current configuration creates a new DelayEngine
-                    and passes a prepare call to all allocated servers.
-        """
-        self.log.info("Preparing FBFUSE product")
-        self._state_sensor.set_value(self.PREPARING)
-        self.log.debug("Product moved to 'preparing' state")
-
-        if not self._ca_client:
-            self.log.warning("No configuration authority found, "
-                             "using default configuration parameters")
-            cm = yield self.set_sb_configuration(self._default_sb_config)
-        else:
-            try:
-                config = yield self.get_ca_sb_configuration(sb_id)
-                cm = yield self.set_sb_configuration(config)
-            except Exception as error:
-                self.log.error(
-                    "Configuring from CA failed with error: {}".format(
-                        str(error)))
-                self.log.warning("Reverting to default configuration")
-                cm = yield self.set_sb_configuration(self._default_sb_config)
-
-        cbc_antennas_names = parse_csv_antennas(
-            self._cbc_antennas_sensor.value())
-        cbc_antennas = [self._antenna_map[name] for name in cbc_antennas_names]
-        self._beam_manager = BeamManager(
-            self._cbc_nbeams_sensor.value(), cbc_antennas)
-        self._delay_config_server = DelayConfigurationServer(
-            self._parent.bind_address[0], 0, self._beam_manager)
-        self._delay_config_server.start()
-        self.log.info("Started delay engine at: {}".format(
-            self._delay_config_server.bind_address))
-        de_ip, de_port = self._delay_config_server.bind_address
-        self._delay_config_server_sensor.set_value((de_ip, de_port))
-
-        # Need to tear down the beam sensors here
-        # Here calculate the beam to multicast map
-        self._beam_sensors = []
+    def _make_mcast_to_beam_map(self):
         mcast_to_beam_map = {}
         groups = [ip for ip in self._cbc_mcast_groups]
         idxs = [beam.idx for beam in self._beam_manager.get_beams()]
-
         for group in groups:
             self.log.debug("Allocating beams to {}".format(str(group)))
             key = "spead://{}:{}".format(str(group), self._cbc_mcast_groups.port)
@@ -764,8 +910,9 @@ class FbfProductController(object):
                 self.log.debug(
                     "--> Allocated {} to {}".format(value, key))
                 mcast_to_beam_map[key].append(value)
-        self._cbc_mcast_groups_mapping_sensor.set_value(
-            json.dumps(mcast_to_beam_map))
+        return mcast_to_beam_map
+
+    def _create_beam_sensors(self):
         for beam in self._beam_manager.get_beams():
             sensor = Sensor.string(
                 "coherent-beam-{}".format(beam.idx),
@@ -779,6 +926,92 @@ class FbfProductController(object):
             self._beam_sensors.append(sensor)
             self.add_sensor(sensor)
         self._parent.mass_inform(Message.inform('interface-changed'))
+
+    @coroutine
+    def _make_beam_plot(self, target):
+        try:
+            png = self._beam_manager.generate_psf_png(
+                target,
+                self._cfreq_sensor.value(), time.time())
+            self._psf_png_sensor.set_value(base64.b64encode(png))
+        except Exception as error:
+            log.exception("Unable to generate beamshape image: {}".format(
+                error))
+
+    @coroutine
+    def target_start(self, target):
+        self._ibc_data_suspect.set_value(True)
+        self._cbc_data_suspect.set_value(True)
+        self._phase_reference_sensor.set_value(target.format_katcp())
+        self._delay_config_server._phase_reference_sensor.set_value(
+            target.format_katcp())
+        self._parent.ioloop.add_callback(self._make_beam_plot, target)
+        if self._ca_client:
+            self._parent.ioloop.add_callback(
+                self.get_ca_target_configuration, target)
+        else:
+            self.log.warning("No configuration authority is set, "
+                             "using default beam configuration")
+
+    @coroutine
+    def prepare(self, sb_id):
+        """
+        @brief      Prepare the beamformer for streaming
+
+        @detail     This method evaluates the current configuration creates a new DelayEngine
+                    and passes a prepare call to all allocated servers.
+        """
+        self.log.info("Preparing FBFUSE product")
+        self._state_sensor.set_value(self.PREPARING)
+        self.log.debug("Product moved to 'preparing' state")
+        self._server_configs = {}
+        try:
+            sb_config = yield self.get_sb_configuration(sb_id)
+        except Exception as error:
+            log.exception("Failed to get SB configuration: {}".format(
+                error))
+            self.log.debug("Returning product to 'idle' state")
+            self._state_sensor.set_value(self.IDLE)
+            raise error
+
+        if sb_config == self._previous_sb_config:
+            self.log.info(("Configuration is unchanged, proceeding "
+                           "with current configuration"))
+            self._state_sensor.set_value(self.READY)
+            self.log.info("Successfully prepared FBFUSE product")
+            raise Return(None)
+
+        # deallocate all multicast IPs and servers
+        yield self.reset_sb_configuration()
+
+        # Allocate IP addresses and servers
+        cm = yield self.set_sb_configuration(sb_config)
+
+        # Start the beam manager
+        cbc_antennas_names = parse_csv_antennas(
+            self._cbc_antennas_sensor.value())
+        cbc_antennas = [self._antenna_map[name] for name in cbc_antennas_names]
+        self._beam_manager = BeamManager(
+            self._cbc_nbeams_sensor.value(), cbc_antennas)
+
+        # Start the delay configuration server
+        # This server provides the antenna set, beam positions and
+        # phase reference for all worker servers
+        self._delay_config_server = DelayConfigurationServer(
+            self._parent.bind_address[0], 0, self._beam_manager)
+        self._delay_config_server.start()
+        self.log.info("Started delay engine at: {}".format(
+            self._delay_config_server.bind_address))
+        de_ip, de_port = self._delay_config_server.bind_address
+        self._delay_config_server_sensor.set_value((de_ip, de_port))
+
+        # Need to tear down the beam sensors here
+        # Here calculate the beam to multicast map
+        self.teardown_beam_sensors()
+        self._create_beam_sensors()
+        mcast_to_beam_map = self._make_mcast_to_beam_map()
+        self._cbc_mcast_groups_mapping_sensor.set_value(
+            json.dumps(mcast_to_beam_map))
 
         # Here we actually start to prepare the remote workers
         ip_splits = self._streams.split(N_FENG_STREAMS_PER_WORKER)
@@ -830,7 +1063,8 @@ class FbfProductController(object):
             group_start = struct.unpack("B", ip_range.base_ip.packed[-1])[0]
             chan0_idx = cm.nchans_per_group * group_start
             chan0_freq = fbottom + chan0_idx * cm.channel_bandwidth
-            future = server.prepare(
+
+            args = (
                 ip_range.format_katcp(),
                 cm.nchans_per_group,
                 chan0_idx,
@@ -840,8 +1074,9 @@ class FbfProductController(object):
                 json.dumps(coherent_beam_config),
                 json.dumps(incoherent_beam_config),
                 de_ip,
-                de_port,
-                timeout=120.0)
+                de_port)
+            self._server_configs[server] = args
+            future = server.prepare(*args, timeout=120.0)
             prepare_futures.append(future)
 
         failure_count = 0
@@ -858,8 +1093,11 @@ class FbfProductController(object):
             self._state_sensor.set_value(self.ERROR)
             self.log.info("Failed to prepare FBFUSE product")
         else:
+            self._previous_sb_config = sb_config
             self._state_sensor.set_value(self.READY)
             self.log.info("Successfully prepared FBFUSE product")
+        yield self.set_levels(20.0, 4.0)
+        yield self._activity_tracker.start()
 
     @coroutine
     def deconfigure(self):
@@ -941,6 +1179,15 @@ class FbfProductController(object):
                         self._servers[ii], str(error)))
         self._state_sensor.set_value(self.READY)
 
+    @coroutine
+    def target_stop(self):
+        if self._ca_client:
+            sensor_name = "{}_beam_position_configuration".format(
+                self._product_id)
+            self._ca_client.set_sampling_strategy(sensor_name, "none")
+        self._ibc_data_suspect.set_value(True)
+        self._cbc_data_suspect.set_value(True)
+
     def add_beam(self, target):
         """
         @brief      Specify the parameters of one managed beam
@@ -980,10 +1227,11 @@ class FbfProductController(object):
         tiling = self._beam_manager.add_tiling(
             target, number_of_beams, reference_frequency, overlap)
         try:
-            tiling.generate(self._katpoint_antennas, epoch)
+            tiling.generate(epoch)
         except Exception as error:
             self.log.exception(
-                "Failed to generate tiling pattern with error: {}".format(str(error)))
+                "Failed to generate tiling pattern with error: {}".format(
+                    str(error)))
         return tiling
 
     def reset_beams(self):

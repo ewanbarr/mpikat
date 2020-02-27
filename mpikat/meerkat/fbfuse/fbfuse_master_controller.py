@@ -28,7 +28,7 @@ import time
 import cPickle
 from threading import Lock
 from optparse import OptionParser
-from tornado.gen import Return, coroutine
+from tornado.gen import coroutine, Return
 from katcp import Sensor, AsyncReply
 from katcp.kattypes import request, return_reply, Int, Str, Float
 from katpoint import Antenna, Target
@@ -36,7 +36,8 @@ from mpikat.core.master_controller import (
     MasterController, ProductLookupError, ProductExistsError)
 from mpikat.core.ip_manager import IpRangeManager, ip_range_from_stream
 from mpikat.core.utils import parse_csv_antennas
-from mpikat.meerkat.katportalclient_wrapper import KatportalClientWrapper
+from mpikat.meerkat.katportalclient_wrapper import (
+    KatportalClientWrapper, SubarrayActivity)
 from mpikat.meerkat.fbfuse import FbfWorkerPool, FbfProductController
 from mpikat.meerkat.test.antennas import ANTENNAS as DEFAULT_ANTENNA_MODELS
 from mpikat.meerkat.fbfuse.fbfuse_feng_subscription_manager import (
@@ -50,6 +51,7 @@ lock = Lock()
 FBF_IP_RANGE = "spead://239.11.1.0+127:7147"
 CONFIG_PICKLE_FILE = "/tmp/fbfuse_config.pickle"
 VALID_NCHANS = [1024, 4096, 32768]
+
 
 class FbfMasterController(MasterController):
     """This is the main KATCP interface for the FBFUSE
@@ -80,7 +82,7 @@ class FbfMasterController(MasterController):
         super(FbfMasterController, self).__init__(ip, port, FbfWorkerPool())
         self._dummy = dummy
         if self._dummy:
-            for ii in range(64):
+            for ii in range(0):
                 self._server_pool.add("127.0.0.1", 50000+ii)
         self._last_configure_arguments = None
         self._feng_subscription_manager = FengToFbfMapper()
@@ -325,12 +327,54 @@ class FbfMasterController(MasterController):
         }
         for key, value in feng_config.items():
             log.debug("{}: {}".format(key, value))
+
+        log.info("Starting subarray activity tracker")
+        activity_tracker = SubarrayActivity(streams['cam.http']['camdata'])
         product = FbfProductController(
             self, product_id, observers, n_channels,
-            feng_groups, proxy_name, feng_config)
+            feng_groups, proxy_name, feng_config, activity_tracker)
         self._products[product_id] = product
         self._update_products_sensor()
         log.debug("Configured FBFUSE instance with ID: {}".format(product_id))
+
+    @coroutine
+    def deprovision_beams(self, product_id):
+        log.info("Deprovisioning beams on FBFUSE instace with ID '{}'".format(
+            product_id))
+        # Test if product exists
+        product = self._get_product(product_id)
+        yield product.reset_sb_configuration()
+
+    @request(Str())
+    @return_reply()
+    def request_deprovision_beams(self, req, product_id):
+        """
+        @brief      Deprovision beams on an FBFUSE product.
+
+        @note       This is similar to a deconfigure, but it will not delete
+                    the product, only deallocate its resources.
+
+        @param      req               A katcp request object
+
+        @param      product_id        This is a name for the data product, used to track which subarray is being deconfigured.
+                                      For example "array_1_bc856M4k".
+
+        @return     katcp reply object [[[ !deprovision-beams ok | (fail [error description]) ]]]
+        """
+        log.info("Received deprovision-beams request")
+        @coroutine
+        def deprovision_beams_wrapper():
+            try:
+                yield self.deprovision_beams(product_id)
+            except Exception as error:
+                log.error("deprovision-beams request failed: {}".format(
+                    str(error)))
+                req.reply("fail", str(error))
+            else:
+                log.info("deprovision-beams request successful")
+                req.reply("ok",)
+        self.ioloop.add_callback(deprovision_beams_wrapper)
+        raise AsyncReply
 
     @request(Str())
     @return_reply()
@@ -404,19 +448,12 @@ class FbfMasterController(MasterController):
         except ProductLookupError as error:
             log.error("target-start request failed with error: {}".format(
                 str(error)))
-            raise Return(("fail", str(error)))
+            raise Return("fail", str(error))
         try:
             target = Target(target)
         except Exception as error:
-            log.exception("Target could not be parsed: {}".format(
-                str(error)))
             raise Return(("fail", str(error)))
-        try:
-            yield product.target_start(target)
-        except Exception as error:
-            log.exception("Target start failed with error: {}".format(
-                str(error)))
-        log.info("Target-start request successful")
+        yield product.target_start(target)
         raise Return(("ok",))
 
     @request(Str())
@@ -761,6 +798,33 @@ class FbfMasterController(MasterController):
         product.add_tiling(target, nbeams-1, 1.4e9, 0.5, now)
         product.add_beam(target)
         return ("ok",)
+
+    @request()
+    @return_reply()
+    def request_register_default_worker_servers(self, req):
+        """
+        @brief      Add default FBFUSE nodes to the server pool
+        """
+        for idx in range(32):
+            self._server_pool.add("fbfpn{:02d}.mpifr-be.mkat.karoo.kat.ac.za".format(idx), 6000)
+            self._server_pool.add("fbfpn{:02d}.mpifr-be.mkat.karoo.kat.ac.za".format(idx), 6001)
+        return ("ok",)
+
+    @request(Str())
+    @return_reply(Str())
+    def request_beam_positions(self, req, product_id):
+        """
+        @brief      Add default FBFUSE nodes to the server pool
+        """
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            return ("fail", str(error))
+        beam_dict = {}
+        beams = product._beam_manager.get_beams()
+        for beam in beams:
+            beam_dict[beam.idx] = beam.target.format_katcp()
+        return ("ok", json.dumps(beam_dict))
 
 
 @coroutine

@@ -486,7 +486,8 @@ class FbfWorkerServer(AsyncDeviceServer):
             feng_capture_order_info = determine_feng_capture_order(
                 feng_config['feng-antenna-map'], coherent_beam_config,
                 incoherent_beam_config)
-            log.info("F-engine capture order info: {}".format(feng_capture_order_info))
+            log.info("F-engine capture order info: {}".format(
+                feng_capture_order_info))
             feng_to_antenna_map = {
                 value: key for key, value in
                 feng_config['feng-antenna-map'].items()}
@@ -585,8 +586,9 @@ class FbfWorkerServer(AsyncDeviceServer):
             heap_id_start = worker_idx * coh_ip_range.count
             log.debug("Determining MKSEND configuration for coherent beams")
             dada_mode = int(self._exec_mode == FULL)
-            coherent_mcast_dest = coherent_beam_config['destination'].lstrip(
-                "spead://").split(":")[0]
+            #coherent_mcast_dest = coherent_beam_config['destination'].lstrip(
+            #    "spead://").split(":")[0]
+            coherent_mcast_dest = ",".join(map(str, coh_ip_range))
             mksend_coh_config = {
                 'dada_key': self._dada_coh_output_key,
                 'dada_mode': dada_mode,

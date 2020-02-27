@@ -94,7 +94,7 @@ class Beam(object):
 class Tiling(object):
     """Wrapper class for a collection of beams in a tiling pattern
     """
-    def __init__(self, target, reference_frequency, overlap):
+    def __init__(self, target, antennas, reference_frequency, overlap):
         """
         @brief   Create a new tiling object
 
@@ -114,6 +114,7 @@ class Tiling(object):
         """
         self._beams = []
         self.target = target
+        self._antennas = antennas
         self.reference_frequency = reference_frequency
         self.overlap = overlap
         self.tiling = None
@@ -130,7 +131,7 @@ class Tiling(object):
         """
         self._beams.append(beam)
 
-    def generate(self, antennas, epoch):
+    def generate(self, epoch):
         """
         @brief   Calculate and update RA and Dec positions of all
                  beams in the tiling object.
@@ -142,20 +143,20 @@ class Tiling(object):
         """
         log.debug("Creating PSF simulator at reference frequency {} Hz".format(
             self.reference_frequency))
-        psfsim = mosaic.PsfSim(antennas, self.reference_frequency)
+        psfsim = mosaic.PsfSim(self._antennas, self.reference_frequency)
         log.debug(("Generating beam shape for target position {} "
                    "at epoch {}").format(self.target, epoch))
         beam_shape = psfsim.get_beam_shape(self.target, epoch)
         log.debug("Generating tiling of {} beams with an overlap of {}".format(
             self.nbeams, self.overlap))
-        margin = max(int(self.nbeams * 0.25), 16)
         tiling = mosaic.generate_nbeams_tiling(
-            beam_shape, self.nbeams, self.overlap, margin)
+            beam_shape, self.nbeams, self.overlap)
         coordinates = tiling.get_equatorial_coordinates()
         for ii in range(min(tiling.beam_num, self.nbeams)):
             ra, dec = coordinates[ii]
             self._beams[ii].target = Target('{},radec,{},{}'.format(
                 self.target.name, ra, dec))
+        return tiling
 
     def __repr__(self):
         return ", ".join([repr(beam) for beam in self._beams])
@@ -192,8 +193,8 @@ class BeamManager(object):
     def antennas(self):
         return self._antennas
 
-    def generate_psf_png(self, target, antennas, reference_frequency, epoch):
-        psfsim = mosaic.PsfSim(antennas, reference_frequency)
+    def generate_psf_png(self, target, reference_frequency, epoch):
+        psfsim = mosaic.PsfSim(self._antennas, reference_frequency)
         beam_shape = psfsim.get_beam_shape(target, epoch)
         png = StringIO.StringIO()
         beam_shape.plot_psf(png, shape_overlay=True)
@@ -246,15 +247,21 @@ class BeamManager(object):
                                     when values are close to zero. In future this may be define in sigma units or
                                     in multiples of the FWHM of the beam.]
 
+        @note       This function will not raise an exception in the event that the user over-requests beams
+                    it is incumbent upon the end user to check what has actually been allocated in the tiling.
+
         @returns    The created Tiling object
         """
-        if len(self._free_beams) < nbeams:
-            raise BeamAllocationError("Requested more beams than are available.")
-        tiling = Tiling(target, reference_frequency, overlap)
+        tiling = Tiling(target, self._antennas, reference_frequency, overlap)
         for _ in range(nbeams):
-            beam = self._free_beams.pop(0)
-            tiling.add_beam(beam)
-            self._allocated_beams.append(beam)
+            if len(self._free_beams) == 0:
+                log.warning("Unable to allocate all beams in tiling: {} of {} allocated".format(
+                    tiling.nbeams, nbeams))
+                break
+            else:
+                beam = self._free_beams.pop(0)
+                tiling.add_beam(beam)
+                self._allocated_beams.append(beam)
         self._tilings.append(tiling)
         return tiling
 

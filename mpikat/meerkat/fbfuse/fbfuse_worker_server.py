@@ -731,6 +731,11 @@ class FbfWorkerServer(AsyncDeviceServer):
             coherent_beam_antenna_capture_order = [feng_to_antenna_map[
                 idx] for idx in coherent_beam_feng_capture_order]
 
+	    nants = len(feng_capture_order_info['order'])
+            self._gain_buffer_ctrl = GainBufferController(nants, partition_nchans, 2)
+            self._gain_buffer_ctrl.create()
+            self._gain_buffer_ctrl.update_gains() 
+
             # Start DelayBufferController instance
             # Here we are going to make the assumption that the server and processing all run in
             # one docker container that will be preallocated with the right CPU set, GPUs, memory
@@ -746,16 +751,6 @@ class FbfWorkerServer(AsyncDeviceServer):
                 self._delay_client, beam_idxs,
                 coherent_beam_antenna_capture_order, 1)
             yield self._delay_buf_ctrl.start()
-
-
-            # This is a temporary set up where we always set the complex
-            # gains to 1 + 0i
-            nants = len(feng_capture_order_info['order'])
-            nchans = feng_config['nchans']
-            npol = 2
-            self._gain_buffer_ctrl = GainBufferController(nants, nchans, npol)
-            self._gain_buffer_ctrl.create()
-            self.update_gains()
 
             # By this point we require psrdada_cpp to have been compiled
             # as such we can yield on the future we created earlier
@@ -871,7 +866,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         # Start beamforming pipeline
         log.info("Starting PSRDADA_CPP beamforming pipeline")
         delay_buffer_key = self._delay_buf_ctrl.shared_buffer_key
-        gain_buffer_key = self._gain_buf_ctrl.shared_buffer_key
+        gain_buffer_key = self._gain_buffer_ctrl.shared_buffer_key
         # Start beamformer instance
         psrdada_cpp_cmdline = [
             "taskset", "-c", psrdada_cpp_cpu_set,
@@ -882,10 +877,9 @@ class FbfWorkerServer(AsyncDeviceServer):
             "--delay_key_root", delay_buffer_key,
             "--gain_key_root", gain_buffer_key,
             "--level_trigger_sem", self._autoscaling_key,
+            "--output_level", self._output_level, 
             "--cfreq", self._centre_frequency,
             "--bandwidth", self._partition_bandwidth,
-            "--input_level", self._input_level,
-            "--output_level", self._output_level,
             "--log_level", "info"]
         self._psrdada_cpp_args_sensor.set_value(
             " ".join(map(str, psrdada_cpp_cmdline)))

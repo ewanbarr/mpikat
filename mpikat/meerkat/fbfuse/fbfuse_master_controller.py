@@ -827,7 +827,6 @@ class FbfMasterController(MasterController):
         return ("ok", json.dumps(beam_dict))
 
     @request(Str())
-    @return_reply()
     @coroutine
     def request_rescale(self, req, product_id):
         """
@@ -836,11 +835,14 @@ class FbfMasterController(MasterController):
         try:
             product = self._get_product(product_id)
         except ProductLookupError as error:
-            raise Return("fail", str(error))
-        try:
-            yield product.rescale()
-        except Exception as error:
-            raise Return("fail", str(error))
+            req.reply("fail", str(error))
+        else:    
+            try:
+                yield product.rescale()
+            except Exception as error:
+                req.reply("fail", str(error))
+	    else:
+                req.reply("ok",)
 
 
 @coroutine

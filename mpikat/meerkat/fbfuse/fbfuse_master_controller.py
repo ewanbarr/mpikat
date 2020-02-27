@@ -836,11 +836,11 @@ class FbfMasterController(MasterController):
         try:
             product = self._get_product(product_id)
         except ProductLookupError as error:
-            return ("fail", str(error))
+            raise Return("fail", str(error))
         try:
             yield product.rescale()
         except Exception as error:
-            return ("fail", str(error))
+            raise Return("fail", str(error))
 
 
 @coroutine

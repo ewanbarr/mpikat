@@ -39,6 +39,8 @@ from mpikat.meerkat.fbfuse.fbfuse_mksend_config import (
     make_mksend_header)
 from mpikat.meerkat.fbfuse.fbfuse_psrdada_cpp_wrapper import (
     compile_psrdada_cpp)
+from mpikat.meerkat.fbfuse.fbfuse_autoscaling_trigger import AutoscalingTrigger
+from mpikat.meerkat.fbfuse.fbfuse_gain_buffer_controller import GainBufferController
 from mpikat.utils.process_tools import process_watcher, ManagedProcess
 from mpikat.utils.db_monitor import DbMonitor
 
@@ -132,7 +134,8 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._dada_incoh_output_key = "baba"
         self._capture_interface = capture_interface
         self._capture_monitor = None
-
+        self._autoscaling_key = "autoscaling_trigger"
+        self._autoscaling_trigger = AutoscalingTrigger(key=self._autoscaling_key)
         self._input_level = 10.0
         self._output_level = 10.0
         self._partition_bandwidth = None
@@ -377,6 +380,19 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._input_level = input_level
         self._output_level = output_level
         return ("ok",)
+
+    @request()
+    @return_reply()
+    def request_rescale(self, req):
+        """
+        @brief    Request and autoscaling of the FBFUSE channels
+        """
+        try:
+            self._autoscaling_trigger.trigger()
+        except Exception as error:
+            return ("fail", str(error))
+        else:
+            return ("ok",)
 
     @request(Str(), Int(), Int(), Float(), Float(), Str(), Str(),
              Str(), Str(), Int())
@@ -731,6 +747,16 @@ class FbfWorkerServer(AsyncDeviceServer):
                 coherent_beam_antenna_capture_order, 1)
             yield self._delay_buf_ctrl.start()
 
+
+            # This is a temporary set up where we always set the complex
+            # gains to 1 + 0i
+            nants = len(feng_capture_order_info['order'])
+            nchans = feng_config['nchans']
+            npol = 2
+            self._gain_buffer_ctrl = GainBufferController(nants, nchans, npol)
+            self._gain_buffer_ctrl.create()
+            self.update_gains()
+
             # By this point we require psrdada_cpp to have been compiled
             # as such we can yield on the future we created earlier
             yield psrdada_compilation_future
@@ -786,6 +812,8 @@ class FbfWorkerServer(AsyncDeviceServer):
             log.info("Destroying delay buffers")
             del self._delay_buf_ctrl
             self._delay_buf_ctrl = None
+            del self._gain_buffer_ctrl
+            self._gain_buffer_ctrl = None
             self._state_sensor.set_value(self.IDLE)
             log.info("Deconfigure request successful")
             req.reply("ok",)
@@ -843,6 +871,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         # Start beamforming pipeline
         log.info("Starting PSRDADA_CPP beamforming pipeline")
         delay_buffer_key = self._delay_buf_ctrl.shared_buffer_key
+        gain_buffer_key = self._gain_buf_ctrl.shared_buffer_key
         # Start beamformer instance
         psrdada_cpp_cmdline = [
             "taskset", "-c", psrdada_cpp_cpu_set,
@@ -851,6 +880,8 @@ class FbfWorkerServer(AsyncDeviceServer):
             "--cb_key", self._dada_coh_output_key,
             "--ib_key", self._dada_incoh_output_key,
             "--delay_key_root", delay_buffer_key,
+            "--gain_key_root", gain_buffer_key,
+            "--level_trigger_sem", self._autoscaling_key,
             "--cfreq", self._centre_frequency,
             "--bandwidth", self._partition_bandwidth,
             "--input_level", self._input_level,

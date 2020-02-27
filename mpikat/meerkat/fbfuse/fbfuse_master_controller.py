@@ -826,6 +826,22 @@ class FbfMasterController(MasterController):
             beam_dict[beam.idx] = beam.target.format_katcp()
         return ("ok", json.dumps(beam_dict))
 
+    @request(Str())
+    @return_reply()
+    @coroutine
+    def request_rescale(self, req, product_id):
+        """
+        @brief      Request rescaling of FBFUSE channels
+        """
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            return ("fail", str(error))
+        try:
+            yield product.rescale()
+        except Exception as error:
+            return ("fail", str(error))
+
 
 @coroutine
 def on_shutdown(ioloop, server):

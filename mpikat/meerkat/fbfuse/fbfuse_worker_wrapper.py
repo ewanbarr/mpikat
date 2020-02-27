@@ -68,6 +68,9 @@ class FbfWorkerWrapper(WorkerWrapper):
     def set_levels(self, *args, **kwargs):
         yield self._make_request(self._client.req.set_levels, *args, **kwargs)
 
+    @coroutine
+    def rescale(self, *args, **kwargs):
+        yield self._make_request(self._client.req.rescale, *args, **kwargs)
 
 class FbfWorkerPool(WorkerPool):
 

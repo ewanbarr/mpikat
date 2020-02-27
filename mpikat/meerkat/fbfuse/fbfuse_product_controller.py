@@ -954,6 +954,21 @@ class FbfProductController(object):
                              "using default beam configuration")
 
     @coroutine
+    def rescale(self):
+        if not self.capturing:
+            raise FbfProductStateError([self.CAPTURING], self.state)
+        futures = []
+        for server in self._servers:
+            futures.append(server.rescale())
+        for ii, future in enumerate(futures):
+            try:
+                yield future
+            except Exception as error:
+                log.exception(
+                    "Error when triggering rescale on server {}: {}".format(
+                        self._servers[ii], str(error)))
+
+    @coroutine
     def prepare(self, sb_id):
         """
         @brief      Prepare the beamformer for streaming

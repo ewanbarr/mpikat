@@ -827,23 +827,26 @@ class FbfMasterController(MasterController):
         return ("ok", json.dumps(beam_dict))
 
     @request(Str())
-    @coroutine
     def request_rescale(self, req, product_id):
         """
         @brief      Request rescaling of FBFUSE channels
         """
-        try:
-            product = self._get_product(product_id)
-        except ProductLookupError as error:
-            req.reply("fail", str(error))
-        else:    
+	@coroutine
+        def wrapper():
             try:
                 yield product.rescale()
             except Exception as error:
                 req.reply("fail", str(error))
-	    else:
+            else:
                 req.reply("ok",)
-
+	
+	try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            req.reply("fail", str(error))
+        else:    
+            self.ioloop.add_callback(wrapper)
+	raise AsyncReply 
 
 @coroutine
 def on_shutdown(ioloop, server):

@@ -454,6 +454,7 @@ class FbfMasterController(MasterController):
         except Exception as error:
             raise Return(("fail", str(error)))
         yield product.target_start(target)
+        yield product.rescale()
         raise Return(("ok",))
 
     @request(Str())
@@ -593,9 +594,9 @@ class FbfMasterController(MasterController):
         log.info("Set-configuration-authority request successful")
         return ("ok",)
 
-    @request(Str(), Float(), Float())
+    @request(Str(), Float())
     @return_reply()
-    def request_set_levels(self, req, product_id, input_level, output_level):
+    def request_set_levels(self, req, product_id, output_level):
         """
         @brief    Set the input and output levels for FBFUSE
 
@@ -604,9 +605,6 @@ class FbfMasterController(MasterController):
         @param      product_id      This is a name for the data product, used
                                     to track which subarray is being
                                     deconfigured. For example "array_1_bc856M4k".
-
-        @param    input_level  The standard deviation of the data
-                               from the F-engines.
 
         @param    output_level  The standard deviation of the data
                                 output from FBFUSE.
@@ -622,7 +620,7 @@ class FbfMasterController(MasterController):
         @coroutine
         def set_levels_wrapper():
             try:
-                yield product.set_levels(input_level, output_level)
+                yield product.set_levels(output_level)
             except Exception as error:
                 log.exception("set-levels request failed: {}".format(
                     str(error)))

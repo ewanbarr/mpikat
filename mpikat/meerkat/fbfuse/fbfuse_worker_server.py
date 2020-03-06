@@ -394,6 +394,24 @@ class FbfWorkerServer(AsyncDeviceServer):
         else:
             return ("ok",)
 
+    @request()
+    @return_reply()
+    def requeset_trigger_tb_dump(self, req, utc_start, width, dm, ref_freq, trigger_id):
+        """
+        @brief
+
+        @param      req:         The request object
+        @param      utc_start:   The utc start (as ISO-8601 UTC)
+        @param      width:       The width of the event in seconds
+        @param      dm:          The dispersion measure in pccm
+        @param      ref_freq:    The reference frequency in Hz
+        @param      trigger_id:  A unique trigger identifier
+        """
+        log.info("Received request for transient buffer capture")
+        log.info("Event parameters: {}")
+        # self._transient_buffer.trigger(...)
+        return ("ok",)
+
     @request(Str(), Int(), Int(), Float(), Float(), Str(), Str(),
              Str(), Str(), Int())
     @return_reply()
@@ -731,10 +749,10 @@ class FbfWorkerServer(AsyncDeviceServer):
             coherent_beam_antenna_capture_order = [feng_to_antenna_map[
                 idx] for idx in coherent_beam_feng_capture_order]
 
-	    nants = len(feng_capture_order_info['order'])
+            nants = len(feng_capture_order_info['order'])
             self._gain_buffer_ctrl = GainBufferController(nants, partition_nchans, 2)
             self._gain_buffer_ctrl.create()
-            self._gain_buffer_ctrl.update_gains() 
+            self._gain_buffer_ctrl.update_gains()
 
             # Start DelayBufferController instance
             # Here we are going to make the assumption that the server and processing all run in
@@ -877,7 +895,7 @@ class FbfWorkerServer(AsyncDeviceServer):
             "--delay_key_root", delay_buffer_key,
             "--gain_key_root", gain_buffer_key,
             "--level_trigger_sem", self._autoscaling_key,
-            "--output_level", self._output_level, 
+            "--output_level", self._output_level,
             "--cfreq", self._centre_frequency,
             "--bandwidth", self._partition_bandwidth,
             "--log_level", "info"]

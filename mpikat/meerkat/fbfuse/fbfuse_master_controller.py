@@ -827,6 +827,7 @@ class FbfMasterController(MasterController):
         return ("ok", json.dumps(beam_dict))
 
     @request(Str())
+    @return_reply
     @coroutine
     def request_rescale(self, req, product_id):
         """
@@ -835,14 +836,41 @@ class FbfMasterController(MasterController):
         try:
             product = self._get_product(product_id)
         except ProductLookupError as error:
-            req.reply("fail", str(error))
-        else:    
+            return ("fail", str(error))
+        else:
             try:
                 yield product.rescale()
             except Exception as error:
-                req.reply("fail", str(error))
-	    else:
-                req.reply("ok",)
+                return ("fail", str(error))
+            else:
+                return ("ok",)
+
+    @request(Str(), ...)
+    @return_reply
+    @coroutine
+    def request_trigger_tb_dump(self, req, product_id, utc_start, width, dm, ref_freq, trigger_id):
+        """
+        @brief   Request a transient buffer dump on the FBFUSE nodes
+
+        @param      req:         The request object
+        @param      product_id:  The product identifier
+        @param      utc_start:   The utc start (as ISO-8601 UTC)
+        @param      width:       The width of the event in seconds
+        @param      dm:          The dispersion measure in pccm
+        @param      ref_freq:    The reference frequency in Hz
+        @param      trigger_id:  A unique trigger identifier
+        """
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            return ("fail", str(error))
+        try:
+            yield product.trigger_tb_dump(
+                utc_start, width, dm, ref_freq, trigger_id)
+        except Exception as error:
+            return ("fail", str(error))
+        else:
+            return ("ok",)
 
 
 @coroutine

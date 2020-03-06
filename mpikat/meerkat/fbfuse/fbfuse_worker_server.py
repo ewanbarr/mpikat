@@ -136,7 +136,6 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._capture_monitor = None
         self._autoscaling_key = "autoscaling_trigger"
         self._autoscaling_trigger = AutoscalingTrigger(key=self._autoscaling_key)
-        self._input_level = 10.0
         self._output_level = 10.0
         self._partition_bandwidth = None
         self._centre_frequency = None
@@ -363,21 +362,17 @@ class FbfWorkerServer(AsyncDeviceServer):
         log.debug("Setting affinity for PID {} to {}".format(pid, core_spec))
         os.system("taskset -cp {} {}".format(core_spec, pid))
 
-    @request(Float(), Float())
+    @request(Float())
     @return_reply()
-    def request_set_levels(self, req, input_level, output_level):
+    def request_set_levels(self, req, output_level):
         """
         @brief    Set the input and output levels for FBFUSE
 
         @param      req             A katcp request object
 
-        @param    input_level  The standard deviation of the data
-                               from the F-engines.
-
         @param    output_level  The standard deviation of the data
                                 output from FBFUSE.
         """
-        self._input_level = input_level
         self._output_level = output_level
         return ("ok",)
 

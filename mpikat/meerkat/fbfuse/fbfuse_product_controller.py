@@ -1127,7 +1127,7 @@ class FbfProductController(object):
             self._previous_sb_config = sb_config
             self._state_sensor.set_value(self.READY)
             self.log.info("Successfully prepared FBFUSE product")
-        yield self.set_levels(20.0, 4.0)
+        yield self.set_levels(10.0)
         yield self._activity_tracker.start()
 
     @coroutine
@@ -1149,13 +1149,13 @@ class FbfProductController(object):
         self._state_sensor.set_value(self.IDLE)
 
     @coroutine
-    def set_levels(self, input_level, output_level):
+    def set_levels(self, output_level):
         if not self.ready:
             raise FbfProductStateError([self.READY], self.state)
         futures = []
         for server in self._servers:
             futures.append(server.set_levels(
-                input_level, output_level))
+                output_level))
         for ii, future in enumerate(futures):
             try:
                 yield future

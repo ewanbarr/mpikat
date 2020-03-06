@@ -1127,7 +1127,7 @@ class FbfProductController(object):
             self._previous_sb_config = sb_config
             self._state_sensor.set_value(self.READY)
             self.log.info("Successfully prepared FBFUSE product")
-        yield self.set_levels(10.0)
+        yield self.set_levels(7.0)
         yield self._activity_tracker.start()
 
     @coroutine

@@ -846,9 +846,7 @@ class FbfMasterController(MasterController):
             self.ioloop.add_callback(wrapper)
 	raise AsyncReply
 
-    @request(Str(), ...)
-    @return_reply
-    @coroutine
+    @request(Str(), Str(), Float(), Float(), Float(), Str())
     def request_trigger_tb_dump(self, req, product_id, utc_start, width, dm, ref_freq, trigger_id):
         """
         @brief   Request a transient buffer dump on the FBFUSE nodes
@@ -861,17 +859,23 @@ class FbfMasterController(MasterController):
         @param      ref_freq:    The reference frequency in Hz
         @param      trigger_id:  A unique trigger identifier
         """
+
+	@coroutine 
+        def wrapper():
+	    try:
+                yield product.trigger_tb_dump(	
+                    utc_start, width, dm, ref_freq, trigger_id)
+	    except Exception as error:
+                log.exception("Failed to run trigger dump: {}".format(str(error)))
+                req.reply("fail", str(error))
+	    else:
+		req.reply("ok",)
         try:
             product = self._get_product(product_id)
         except ProductLookupError as error:
-            return ("fail", str(error))
-        try:
-            yield product.trigger_tb_dump(
-                utc_start, width, dm, ref_freq, trigger_id)
-        except Exception as error:
-            return ("fail", str(error))
-        else:
-            return ("ok",)
+            req.reply("fail", str(error))
+	self.ioloop.add_callback(wrapper)
+	raise AsyncReply
 
 @coroutine
 def on_shutdown(ioloop, server):

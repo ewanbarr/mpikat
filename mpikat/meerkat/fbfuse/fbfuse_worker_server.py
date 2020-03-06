@@ -389,9 +389,9 @@ class FbfWorkerServer(AsyncDeviceServer):
         else:
             return ("ok",)
 
-    @request()
+    @request(Str(), Str(), Float(), Float(), Float(), Str())
     @return_reply()
-    def requeset_trigger_tb_dump(self, req, utc_start, width, dm, ref_freq, trigger_id):
+    def request_trigger_tb_dump(self, req, utc_start, width, dm, ref_freq, trigger_id):
         """
         @brief
 

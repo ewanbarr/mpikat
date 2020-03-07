@@ -238,7 +238,7 @@ class ApsProductController(object):
 
         # Now get all information required for APSMETA file
         output_dir = "{}/{}".format(
-            self._base_output_dir, time.strftime("%Y%M%d_%H%M%S"))
+            self._base_output_dir, time.strftime("%Y%m%d_%H%M%S"))
         os.makedirs(output_dir)
         proposal_id = yield self._katportal_client.get_proposal_id()
         sb_id = yield self._katportal_client.get_sb_id()
@@ -251,7 +251,7 @@ class ApsProductController(object):
             "incoherent_tsamp": self._fbf_sb_config["incoherent-beam-time-resolution"],
             "project_name": proposal_id,
             "sb_id": sb_id,
-            "utc_start": time.strftime("%Y/%M/%d %H:%M:%S"),
+            "utc_start": time.strftime("%Y/%m/%d %H:%M:%S"),
             "beamshape": target_config["coherent-beam-shape"]
         }
 

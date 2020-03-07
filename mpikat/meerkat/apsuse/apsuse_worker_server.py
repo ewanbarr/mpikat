@@ -33,6 +33,7 @@ from mpikat.meerkat.apsuse.apsuse_capture import ApsCapture
 
 log = logging.getLogger("mpikat.apsuse_worker_server")
 
+
 class ApsWorkerServer(AsyncDeviceServer):
     VERSION_INFO = ("aps-worker-server-api", 0, 1)
     BUILD_INFO = ("aps-worker-server-implementation", 0, 1, "rc1")
@@ -244,7 +245,12 @@ class ApsWorkerServer(AsyncDeviceServer):
             capture_instance.target_stop()
             futures.append(capture_instance.capture_stop())
             for sensor in capture_instance._sensors:
-                self.remove_sensor(sensor)
+                try:
+                    self.remove_sensor(sensor)
+                except Exception as error:
+                    log.exception(
+                        "Failed to remove sensor with error: {}".format(
+                            str(error)))
         self.mass_inform(Message.inform('interface-changed'))
         for future in futures:
             try:

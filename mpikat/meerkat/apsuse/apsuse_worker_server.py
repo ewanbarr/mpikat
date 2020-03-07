@@ -256,7 +256,7 @@ class ApsWorkerServer(AsyncDeviceServer):
         log.info("Deconfigured worker server")
         raise Return(("ok",))
 
-    @request(Str())
+    @request(Str(), Str())
     @return_reply()
     def request_target_start(self, req, beam_info, output_dir):
         """

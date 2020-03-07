@@ -13,9 +13,9 @@ from mpikat.utils.db_monitor import DbMonitor
 from mpikat.utils.unix_socket import UDSClient
 
 AVAILABLE_CAPTURE_MEMORY = 3221225472  * 10
-MAX_DADA_BLOCK_SIZE = 1<<28
+MAX_DADA_BLOCK_SIZE = 1<<30
 OPTIMAL_BLOCK_LENGTH = 10.0 # seconds
-OPTIMAL_CAPTURE_BLOCKS = 8
+OPTIMAL_CAPTURE_BLOCKS = 16 
 
 log = logging.getLogger("mpikat.apsuse_capture")
 
@@ -130,11 +130,11 @@ class ApsCapture(object):
         heap_group_size = config['heap-size'] * nbeams * npartitions
 
         heap_group_duration = (heap_group_size / config['nchans-per-heap']) * config['sampling-interval']
-        optimal_heap_groups = OPTIMAL_BLOCK_LENGTH / heap_group_duration
-        if (optimal_heap_groups * heap_group_size) > MAX_DADA_BLOCK_SIZE:
-            ngroups_data = int(MAX_DADA_BLOCK_SIZE / heap_group_size)
-        else:
-            ngroups_data = optimal_heap_groups
+        #optimal_heap_groups = int(OPTIMAL_BLOCK_LENGTH / heap_group_duration)
+        #if (optimal_heap_groups * heap_group_size) > MAX_DADA_BLOCK_SIZE:
+        ngroups_data = int(MAX_DADA_BLOCK_SIZE / heap_group_size)
+        #else:
+        #    ngroups_data = optimal_heap_groups
 
         # Move to power of 2 heap groups (not necessary, but helpful)
         ngroups_data = 2**((ngroups_data-1).bit_length())
@@ -165,7 +165,7 @@ class ApsCapture(object):
 
         # Start APSUSE processing code
         apsuse_cmdline = [
-            "taskset", "-c", self._apsuse_cpu_set,
+            #"taskset", "-c", self._apsuse_cpu_set,
             "apsuse",
             "--input_key", self._dada_input_key,
             "--ngroups", ngroups_data,
@@ -234,7 +234,7 @@ class ApsCapture(object):
 
         log.info("Starting MKRECV")
         self._mkrecv_proc = ManagedProcess(
-            ["taskset", "-c", self._mkrecv_cpu_set,
+            [#"taskset", "-c", self._mkrecv_cpu_set,
              "mkrecv_nt", "--header",
              self._mkrecv_config_filename, "--quiet"],
             stdout_handler=mkrecv_aggregated_output_handler,

@@ -165,7 +165,7 @@ class ApsCapture(object):
 
         # Start APSUSE processing code
         apsuse_cmdline = [
-            #"taskset", "-c", self._apsuse_cpu_set,
+            "taskset", "-c", self._apsuse_cpu_set,
             "apsuse",
             "--input_key", self._dada_input_key,
             "--ngroups", ngroups_data,
@@ -234,7 +234,7 @@ class ApsCapture(object):
 
         log.info("Starting MKRECV")
         self._mkrecv_proc = ManagedProcess(
-            [#"taskset", "-c", self._mkrecv_cpu_set,
+            ["taskset", "-c", self._mkrecv_cpu_set,
              "mkrecv_nt", "--header",
              self._mkrecv_config_filename, "--quiet"],
             stdout_handler=mkrecv_aggregated_output_handler,

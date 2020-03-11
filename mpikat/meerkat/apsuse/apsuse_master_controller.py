@@ -317,6 +317,16 @@ class ApsMasterController(MasterController):
             log.info("Set data rate per worker to {} bits/s".format(rate))
             return ("ok",)
 
+    @request()
+    @return_reply()
+    def request_register_default_worker_servers(self, req):
+        """
+        @brief      Add default APSUSE nodes to the server pool
+        """
+        for idx in range(8):
+            self._server_pool.add("apscn{:02d}.mpifr-be.mkat.karoo.kat.ac.za".format(idx), 6000)
+        return ("ok",)
+
 @coroutine
 def on_shutdown(ioloop, server):
     log.info("Shutting down server")

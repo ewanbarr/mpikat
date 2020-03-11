@@ -25,7 +25,7 @@ from mpikat.core.ip_manager import ip_range_from_stream
 
 log = logging.getLogger('mpikat.apsuse_config_manager')
 
-DATA_RATE_PER_WORKER = 12e9  # bits / s
+DEFAULT_DATA_RATE_PER_WORKER = 6e9  # bits / s
 
 DUMMY_FBF_CONFIG = {
     "coherent-beam-multicast-groups":"spead://239.11.1.15+15:7147",
@@ -48,7 +48,7 @@ class ApsWorkerTotalBandwidthExceeded(Exception):
 
 
 class ApsWorkerConfig(object):
-    def __init__(self, total_bandwidth=DATA_RATE_PER_WORKER):
+    def __init__(self, total_bandwidth=DEFAULT_DATA_RATE_PER_WORKER):
         log.debug("Created new apsuse worker config")
         self._total_bandwidth = total_bandwidth
         self._available_bandwidth = self._total_bandwidth
@@ -95,9 +95,10 @@ class ApsWorkerConfig(object):
         return self._incoherent_beams
 
 
-def get_required_workers(fbfuse_config):
+def get_required_workers(fbfuse_config,
+                         bandwidth_per_worker=DEFAULT_DATA_RATE_PER_WORKER):
     workers = []
-    current_worker = ApsWorkerConfig()
+    current_worker = ApsWorkerConfig(bandwidth_per_worker)
     # There is a slightly sketchy assumption here that there will only ever
     # be one multicast group for the incoherent beam
     incoherent_range = ip_range_from_stream(fbfuse_config['incoherent-beam-multicast-group'])
@@ -123,7 +124,7 @@ def get_required_workers(fbfuse_config):
             break
         except ApsWorkerBandwidthExceeded:
             workers.append(current_worker)
-            current_worker = ApsWorkerConfig()
+            current_worker = ApsWorkerConfig(bandwidth_per_worker)
             current_worker.add_coherent_group(group, coherent_mcast_group_rate)
     else:
         workers.append(current_worker)

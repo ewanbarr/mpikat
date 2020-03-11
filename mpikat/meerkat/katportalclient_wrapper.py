@@ -276,6 +276,11 @@ class SensorTracker(object):
         log.debug("Initial state: {}".format(self._state))
         self._has_started = True
 
+    @coroutine
+    def stop(self):
+        yield self._client.unsubscribe(self._namespace)
+        yield self._client.disconnect()
+
     def event_handler(self, msg_dict):
         status = msg_dict['msg_data']['status']
         if status == "nominal":

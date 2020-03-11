@@ -82,6 +82,8 @@ class ApsProductController(object):
         self._fbf_sb_config = None
         self._state_interrupt = Event()
         self._base_output_dir = "/output/"
+        self._coherent_beam_tracker = None
+        self._incoherent_beam_tracker = None
         self.setup_sensors()
 
     def __del__(self):
@@ -155,9 +157,13 @@ class ApsProductController(object):
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._servers_sensor)
 
-        # Server to multicast group map
-
-        # ???
+        self._data_rate_per_worker_sensor = Sensor.float(
+            "data-rate-per-worker",
+            description="The maximum ingest rate per APSUSE worker server",
+            default=6e9,
+            unit="bits/s",
+            initial_status=Sensor.NOMINAL)
+        self.add_sensor(self._data_rate_per_worker_sensor)
 
         self._parent.mass_inform(Message.inform('interface-changed'))
         self._state_sensor.set_value(self.READY)
@@ -227,6 +233,12 @@ class ApsProductController(object):
         for server in self._servers:
             yield server.disable_writers()
 
+    def set_data_rate_per_worker(self, value):
+        if (value < 1e9) or (value > 25e9):
+            log.warning("Suspect data rate set for workers: {} bits/s".format(
+                value))
+        self._data_rate_per_worker_sensor.set_value(value)
+
     @coroutine
     def enable_writers(self):
         self.log.info("Enabling writers")
@@ -292,7 +304,8 @@ class ApsProductController(object):
         self._fbf_sb_config = yield self._katportal_client.get_fbfuse_sb_config(self._product_id)
         self._fbf_sb_config_sensor.set_value(self._fbf_sb_config)
         self.log.debug("Determined FBFUSE config: {}".format(self._fbf_sb_config))
-        worker_configs = get_required_workers(self._fbf_sb_config)
+        worker_configs = get_required_workers(
+            self._fbf_sb_config, self._data_rate_per_worker_sensor.value())
 
         # allocate workers
         self._worker_config_map = {}
@@ -375,24 +388,24 @@ class ApsProductController(object):
             yield future
 
         # At this point we do the data-suspect tracking start
-        coherent_beam_tracker = self._katportal_client.get_sensor_tracker(
+        self._coherent_beam_tracker = self._katportal_client.get_sensor_tracker(
             "fbfuse", "fbfmc_{}_coherent_beam_data_suspect".format(
                 self._product_id))
-        incoherent_beam_tracker = self._katportal_client.get_sensor_tracker(
+        self._incoherent_beam_tracker = self._katportal_client.get_sensor_tracker(
             "fbfuse", "fbfmc_{}_incoherent_beam_data_suspect".format(
                 self._product_id))
         self.log.info("Starting FBFUSE data-suspect tracking")
-        yield coherent_beam_tracker.start()
-        yield incoherent_beam_tracker.start()
+        yield self._coherent_beam_tracker.start()
+        yield self._incoherent_beam_tracker.start()
 
         @coroutine
         def wait_for_on_target():
             self.log.info("Waiting for data-suspect flags to become False")
             self._state_interrupt.clear()
             try:
-                yield coherent_beam_tracker.wait_until(
+                yield self._coherent_beam_tracker.wait_until(
                     False, self._state_interrupt)
-                yield incoherent_beam_tracker.wait_until(
+                yield self._incoherent_beam_tracker.wait_until(
                     False, self._state_interrupt)
             except Interrupt:
                 self.log.debug("data-suspect tracker interrupted")
@@ -411,18 +424,15 @@ class ApsProductController(object):
             self.log.info("Waiting for data-suspect flags to become True")
             self._state_interrupt.clear()
             try:
-                yield coherent_beam_tracker.wait_until(
+                yield self._coherent_beam_tracker.wait_until(
                     True, self._state_interrupt)
-                yield incoherent_beam_tracker.wait_until(
+                yield self._incoherent_beam_tracker.wait_until(
                     True, self._state_interrupt)
             except Interrupt:
                 self.log.debug("data-suspect tracker interrupted")
                 pass
             else:
                 self.log.info("data-suspect flags now True (off-target/retiling)")
-
-
-
                 yield self.disable_all_writers()
                 self._parent.ioloop.add_callback(wait_for_on_target)
 
@@ -447,6 +457,14 @@ class ApsProductController(object):
             return
         self._state_sensor.set_value(self.STOPPING)
         self._state_interrupt.set()
+
+        if self._coherent_beam_tracker:
+            yield self._coherent_beam_tracker.stop()
+            self._coherent_beam_tracker = None
+        if self._incoherent_beam_tracker:
+            yield self._incoherent_beam_tracker.stop()
+            self._incoherent_beam_tracker = None
+
         yield self.disable_all_writers()
         deconfigure_futures = []
         for server in self._worker_config_map.keys():

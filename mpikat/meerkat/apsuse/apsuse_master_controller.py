@@ -27,7 +27,7 @@ import signal
 from optparse import OptionParser
 from tornado.gen import Return, coroutine
 from katcp import AsyncReply
-from katcp.kattypes import request, return_reply, Str
+from katcp.kattypes import request, return_reply, Str, Float
 from katpoint import Target
 from mpikat.core.master_controller import MasterController
 from mpikat.core.exceptions import ProductLookupError
@@ -288,6 +288,34 @@ class ApsMasterController(MasterController):
         self.ioloop.add_callback(stop)
         raise AsyncReply
 
+    @request(Str(), Float())
+    @return_reply()
+    def request_set_data_rate_per_worker(self, req, product_id, rate):
+        """
+        @brief      Set the maximum ingest rate per APSUSE worker server
+
+        @detail     This number caps the maximum number of beams that can be
+                    ingested into an APSCN node. It is recommended to keep this
+                    below 25 Gb/s.
+
+        @param      product_id      This is a name for the data product, used to track which subarray is being deconfigured.
+                                    For example "array_1_bc856M4k".
+
+        @param      rate            The data rate per APSCN worker in units of bits/s
+        """
+        log.info("Set data rate per worker request for product '{}'".format(product_id))
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            return ("fail", str(error))
+        try:
+            product.set_data_rate_per_worker(rate)
+        except Exception as error:
+            log.exception("Error when setting data rate per worker: {}".format(str(error)))
+            return ("fail", str(error))
+        else:
+            log.info("Set data rate per worker to {} bits/s".format(rate))
+            return ("ok",)
 
 @coroutine
 def on_shutdown(ioloop, server):

@@ -220,6 +220,7 @@ class ApsWorkerServer(AsyncDeviceServer):
 
         for capture_instance in self._capture_instances:
             for sensor in capture_instance._sensors:
+                log.debug("Adding sensor: {}".format(sensor.name))
                 self.add_sensor(sensor)
 
         self.mass_inform(Message.inform('interface-changed'))

@@ -403,7 +403,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         @param      trigger_id:  A unique trigger identifier
         """
         log.info("Received request for transient buffer capture")
-        log.info("Event parameters: {}")
+        log.info("Event parameters: {}, {}, {}, {}, {}".format(utc_start, width, dm, ref_freq, trigger_id))
         # self._transient_buffer.trigger(...)
         return ("ok",)
 

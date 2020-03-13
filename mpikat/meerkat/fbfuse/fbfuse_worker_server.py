@@ -401,7 +401,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         with open("/proc/self/cgroup", "r") as f:
             line = f.readline()
             idx = line.split("/")[-1].strip()
-        req.reply("ok,")
+        req.reply("ok",)
         os.system("docker restart {}".format(idx))
 
     @request(Str(), Float(), Float(), Float(), Str())

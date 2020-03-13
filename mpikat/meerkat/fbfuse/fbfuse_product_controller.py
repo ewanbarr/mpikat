@@ -607,6 +607,7 @@ class FbfProductController(object):
                 log.exception(
                     "Unable to deconfigure server {}: {}".format(
                         self._servers[ii], str(error)))
+        self.reset_workers()
         self._parent._server_pool.deallocate(self._servers)
         self._servers = []
         if self._ibc_mcast_group:

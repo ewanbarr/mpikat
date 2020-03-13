@@ -24,22 +24,22 @@ import coloredlogs
 import json
 import tornado
 import signal
-import time
-import numpy as np
 from optparse import OptionParser
 from tornado.gen import Return, coroutine
-from katcp import Sensor, AsyncReply
-from katcp.kattypes import request, return_reply, Int, Str, Discrete, Float
+from katcp import AsyncReply
+from katcp.kattypes import request, return_reply, Str, Float
 from katpoint import Target
 from mpikat.core.master_controller import MasterController
 from mpikat.core.exceptions import ProductLookupError
-from mpikat.meerkat.katportalclient_wrapper import FbfKatportalMonitor
-from mpikat.meerkat.apsuse import ApsProductController
-from mpikat.meerkat.apsuse import ApsWorkerPool
+from mpikat.meerkat.katportalclient_wrapper import KatportalClientWrapper
+from mpikat.meerkat.test.utils import MockKatportalClientWrapper
+from mpikat.meerkat.apsuse.apsuse_product_controller import ApsProductController
+from mpikat.meerkat.apsuse.apsuse_worker_wrapper import ApsWorkerPool
 
 # ?halt message means shutdown everything and power off all machines
 
 log = logging.getLogger("mpikat.apsuse_master_controller")
+
 
 class ApsMasterController(MasterController):
     """This is the main KATCP interface for the APSUSE
@@ -62,7 +62,8 @@ class ApsMasterController(MasterController):
         @params  port     The port that the server should bind to
         """
         super(ApsMasterController, self).__init__(ip, port, ApsWorkerPool())
-        self._katportal_wrapper_type = FbfKatportalMonitor
+        self._katportal_wrapper_type = KatportalClientWrapper
+        #self._katportal_wrapper_type = MockKatportalClientWrapper
         self._dummy = dummy
         if self._dummy:
             for ii in range(8):
@@ -114,10 +115,9 @@ class ApsMasterController(MasterController):
 
                                       @code
                                          pprint(streams_dict)
-                                         {'cam.http':
-                                             {'camdata':'http://10.8.67.235/api/client/1'},
-                                          'cbf.antenna_channelised_voltage':
-                                             {'i0.antenna-channelised-voltage':'spead://239.2.1.150+15:7148'},
+                                         {"cam.http": {"camdata":"http://10.8.67.235/api/client/1"},
+                                          "cbf.antenna_channelised_voltage":
+                                             {"i0.antenna-channelised-voltage":"spead://239.2.1.150+15:7148"},
                                           ...}
                                       @endcode
 
@@ -134,30 +134,40 @@ class ApsMasterController(MasterController):
         """
 
         msg = ("Configuring new APSUSE product",
-            "Product ID: {}".format(product_id),
-            "Streams: {}".format(streams_json),
-            "Proxy name: {}".format(proxy_name))
+               "Product ID: {}".format(product_id),
+               "Streams: {}".format(streams_json),
+               "Proxy name: {}".format(proxy_name))
         log.info("\n".join(msg))
         # Test if product_id already exists
         if product_id in self._products:
             return ("fail", "APS already has a configured product with ID: {}".format(product_id))
+
         # Determine number of nodes required based on number of antennas in subarray
         # Note this is a poor way of handling this that may be updated later. In theory
         # there is a throughput measure as a function of bandwidth, polarisations and number
         # of antennas that allows one to determine the number of nodes to run. Currently we
         # just assume one antennas worth of data per NIC on our servers, so two antennas per
         # node.
+
         streams = json.loads(streams_json)
         try:
             streams['cam.http']['camdata']
         except KeyError as error:
-            return ("fail", "JSON streams object does not contain required key: {}".format(str(error)))
+            return ("fail",
+                "JSON streams object does not contain required key: {}".format(
+                    str(error)))
         @coroutine
         def configure():
-            fbf_monitor = self._katportal_wrapper_type(streams['cam.http']['camdata'], product_id)
-            self._products[product_id] = ApsProductController(self, product_id, fbf_monitor, proxy_name)
+            katportal_client = self._katportal_wrapper_type(
+                streams['cam.http']['camdata'], product_id)
+            self._products[product_id] = ApsProductController(
+                self, product_id, katportal_client, proxy_name)
+            try:
+                yield self._products[product_id].configure()
+            except Exception:
+                log.exception("Error during configuration")
             self._update_products_sensor()
-            log.debug("Configured APSUSE instance with ID: {}".format(product_id))
+            log.info("Configured APSUSE instance with ID: {}".format(product_id))
             req.reply("ok",)
         self.ioloop.add_callback(configure)
         raise AsyncReply
@@ -190,8 +200,8 @@ class ApsMasterController(MasterController):
             return ("fail", str(error))
         del self._products[product_id]
         self._update_products_sensor()
+        log.info("Deconfigured APSUSE instance with ID '{}'".format(product_id))
         return ("ok",)
-
 
     @request(Str(), Str())
     @return_reply()
@@ -216,7 +226,8 @@ class ApsMasterController(MasterController):
             target = Target(target)
         except Exception as error:
             raise Return(("fail", str(error)))
-        yield product.target_start(target)
+        yield product.disable_all_writers()
+        yield product.enable_writers()
         raise Return(("ok",))
 
     @request(Str())
@@ -236,6 +247,7 @@ class ApsMasterController(MasterController):
 
         @return     katcp reply object [[[ !start-beams ok | (fail [error description]) ]]]
         """
+        log.info("Capture start requested on product '{}'".format(product_id))
         try:
             product = self._get_product(product_id)
         except ProductLookupError as error:
@@ -245,8 +257,10 @@ class ApsMasterController(MasterController):
             try:
                 yield product.capture_start()
             except Exception as error:
+                log.exception("Error on capture start")
                 req.reply("fail", str(error))
             else:
+                log.info("Capture start complete for '{}'".format(product_id))
                 req.reply("ok",)
         self.ioloop.add_callback(start)
         raise AsyncReply
@@ -260,6 +274,7 @@ class ApsMasterController(MasterController):
         @param      product_id      This is a name for the data product, used to track which subarray is being deconfigured.
                                     For example "array_1_bc856M4k".
         """
+        log.info("Capture stop request on '{}'".format(product_id))
         try:
             product = self._get_product(product_id)
         except ProductLookupError as error:
@@ -268,10 +283,49 @@ class ApsMasterController(MasterController):
         @coroutine
         def stop():
             yield product.capture_stop()
+            log.info("Capture stop complete for '{}'".format(product_id))
             req.reply("ok",)
         self.ioloop.add_callback(stop)
         raise AsyncReply
 
+    @request(Str(), Float())
+    @return_reply()
+    def request_set_data_rate_per_worker(self, req, product_id, rate):
+        """
+        @brief      Set the maximum ingest rate per APSUSE worker server
+
+        @detail     This number caps the maximum number of beams that can be
+                    ingested into an APSCN node. It is recommended to keep this
+                    below 25 Gb/s.
+
+        @param      product_id      This is a name for the data product, used to track which subarray is being deconfigured.
+                                    For example "array_1_bc856M4k".
+
+        @param      rate            The data rate per APSCN worker in units of bits/s
+        """
+        log.info("Set data rate per worker request for product '{}'".format(product_id))
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            return ("fail", str(error))
+        try:
+            product.set_data_rate_per_worker(rate)
+        except Exception as error:
+            log.exception("Error when setting data rate per worker: {}".format(str(error)))
+            return ("fail", str(error))
+        else:
+            log.info("Set data rate per worker to {} bits/s".format(rate))
+            return ("ok",)
+
+    @request()
+    @return_reply()
+    def request_register_default_worker_servers(self, req):
+        """
+        @brief      Add default APSUSE nodes to the server pool
+        """
+        for idx in range(8):
+            self._server_pool.add("apscn{:02d}.mpifr-be.mkat.karoo.kat.ac.za".format(idx), 6000)
+        return ("ok",)
 
 @coroutine
 def on_shutdown(ioloop, server):
@@ -285,7 +339,7 @@ def main():
     parser = OptionParser(usage=usage)
     parser.add_option('-H', '--host', dest='host', type=str,
         help='Host interface to bind to')
-    parser.add_option('-p', '--port', dest='port', type=long,
+    parser.add_option('-p', '--port', dest='port', type=int,
         help='Port number to bind to')
     parser.add_option('', '--log_level',dest='log_level',type=str,
         help='Port number of status server instance',default="INFO")

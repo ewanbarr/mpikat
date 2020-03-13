@@ -32,7 +32,7 @@ from katcp import Sensor, Message, KATCPClientResource
 from katpoint import Target, Antenna
 from mpikat.core.ip_manager import ip_range_from_stream
 from mpikat.core.utils import parse_csv_antennas, LoggingSensor
-from mpikat.meerkat.katportalclient_wrapper import SubarrayActivityInterrupt
+from mpikat.meerkat.katportalclient_wrapper import Interrupt
 from mpikat.meerkat.fbfuse import (
     BeamManager,
     BeamAllocationError,
@@ -343,6 +343,20 @@ class FbfProductController(object):
             default=True,
             initial_status=Sensor.NOMINAL)
         self.add_sensor(self._cbc_data_suspect)
+
+        self._cbc_data_suspect = Sensor.boolean(
+            "coherent-beam-data-suspect",
+            description="Indicates when data from the coherent beam is expected to be invalid",
+            default=True,
+            initial_status=Sensor.NOMINAL)
+        self.add_sensor(self._cbc_data_suspect)
+
+        self._cbc_beam_shape = Sensor.string(
+            "coherent-beam-shape",
+            description="JSON description of the tied array beam shape",
+            default="",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._cbc_beam_shape)
 
         self._ibc_nbeams_sensor = Sensor.integer(
             "incoherent-beam-count",
@@ -837,7 +851,7 @@ class FbfProductController(object):
             try:
                 yield self._activity_tracker.wait_until(
                     "track", self._activity_tracker_interrupt)
-            except SubarrayActivityInterrupt:
+            except Interrupt:
                 self.log.debug("Interrupting callback waiting on 'track' state")
                 pass
             except Exception as error:
@@ -1273,6 +1287,12 @@ class FbfProductController(object):
             self.log.exception(
                 "Failed to generate tiling pattern with error: {}".format(
                     str(error)))
+        beam_shape = {
+            "x": tiling.beam_shape.axisH,
+            "y": tiling.beam_shape.axisV,
+            "angle": tiling.beam_shape.angle
+        }
+        self._cbc_beam_shape.set_value(json.dumps(beam_shape))
         return tiling
 
     def reset_beams(self):
@@ -1285,3 +1305,6 @@ class FbfProductController(object):
         if self.state not in valid_states:
             raise FbfProductStateError(valid_states, self.state)
         self._beam_manager.reset()
+
+
+

@@ -20,13 +20,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 import logging
-from math import floor, ceil
+import json
 from mpikat.core.ip_manager import ip_range_from_stream
 
 log = logging.getLogger('mpikat.apsuse_config_manager')
 
-DATA_RATE_PER_WORKER = 30e9 #bits / s
-
+DEFAULT_DATA_RATE_PER_WORKER = 6e9  # bits / s
 
 DUMMY_FBF_CONFIG = {
     "coherent-beam-multicast-groups":"spead://239.11.1.15+15:7147",
@@ -39,44 +38,72 @@ DUMMY_FBF_CONFIG = {
 class ApsConfigurationError(Exception):
     pass
 
+
 class ApsWorkerBandwidthExceeded(Exception):
     pass
+
 
 class ApsWorkerTotalBandwidthExceeded(Exception):
     pass
 
+
 class ApsWorkerConfig(object):
-    def __init__(self, total_bandwidth=DATA_RATE_PER_WORKER):
+    def __init__(self, total_bandwidth=DEFAULT_DATA_RATE_PER_WORKER):
+        log.debug("Created new apsuse worker config")
         self._total_bandwidth = total_bandwidth
         self._available_bandwidth = self._total_bandwidth
         self._incoherent_groups = []
         self._coherent_groups = []
+        self._incoherent_beams = []
+        self._coherent_beams = []
 
     def add_incoherent_group(self, group, bandwidth):
         if bandwidth > self._total_bandwidth:
+            log.debug("Adding group would exceed worker bandwidth")
             raise ApsWorkerTotalBandwidthExceeded
 
         if self._available_bandwidth < bandwidth:
+            log.debug("Adding group would exceed worker bandwidth")
             raise ApsWorkerBandwidthExceeded
         else:
+            log.debug("Adding group {} to worker".format(group))
             self._incoherent_groups.append(group)
             self._available_bandwidth -= bandwidth
 
     def add_coherent_group(self, group, bandwidth):
         if self._available_bandwidth < bandwidth:
+            log.debug("Adding group would exceed worker bandwidth")
             raise ApsWorkerBandwidthExceeded
         else:
             self._coherent_groups.append((group))
+            log.debug("Adding group {} to worker".format(group))
             self._available_bandwidth -= bandwidth
 
+    def data_rate(self):
+        return self._total_bandwidth - self._available_bandwidth
 
-def get_required_workers(fbfuse_config):
+    def coherent_groups(self):
+        return self._coherent_groups
+
+    def incoherent_groups(self):
+        return self._incoherent_groups
+
+    def coherent_beams(self):
+        return self._coherent_beams
+
+    def incoherent_beams(self):
+        return self._incoherent_beams
+
+
+def get_required_workers(fbfuse_config,
+                         bandwidth_per_worker=DEFAULT_DATA_RATE_PER_WORKER):
     workers = []
-    current_worker = ApsWorkerConfig()
+    current_worker = ApsWorkerConfig(bandwidth_per_worker)
     # There is a slightly sketchy assumption here that there will only ever
     # be one multicast group for the incoherent beam
     incoherent_range = ip_range_from_stream(fbfuse_config['incoherent-beam-multicast-group'])
     incoherent_mcast_group_rate = fbfuse_config['incoherent-beam-multicast-group-data-rate']
+
     for group in incoherent_range:
         try:
             current_worker.add_incoherent_group(group, incoherent_mcast_group_rate)
@@ -97,10 +124,30 @@ def get_required_workers(fbfuse_config):
             break
         except ApsWorkerBandwidthExceeded:
             workers.append(current_worker)
-            current_worker = ApsWorkerConfig()
+            current_worker = ApsWorkerConfig(bandwidth_per_worker)
             current_worker.add_coherent_group(group, coherent_mcast_group_rate)
     else:
         workers.append(current_worker)
+
+    # Get all beam mappings
+    for worker in workers:
+        for incoherent_group in worker.incoherent_groups():
+            worker._incoherent_beams.append("ifbf00000")
+        for coherent_group in worker.coherent_groups():
+            spead_formatted = "spead://{}:{}".format(str(coherent_group), coherent_range.port)
+            mapping = json.loads(fbfuse_config['coherent-beam-multicast-group-mapping'])
+            beam_idxs = mapping[spead_formatted]
+            worker._coherent_beams.extend(beam_idxs)
+
+    for ii, worker in enumerate(workers):
+        log.debug(("Worker {} config: coherent-groups: {},"
+                   " coherent-beams: {}, incoherent-groups: {},"
+                   " incoherent-beams: {},").format(
+                   ii, map(str, worker.coherent_groups()),
+                   map(str, worker.coherent_beams()),
+                   map(str, worker.incoherent_groups()),
+                   map(str, worker.incoherent_beams())))
+
     return workers
 
 

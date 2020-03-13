@@ -21,19 +21,17 @@ SOFTWARE.
 """
 
 import logging
-import json
 import time
+import os
+import json
 from copy import deepcopy
-from tornado.gen import coroutine, Return
+from tornado.gen import coroutine
 from tornado.locks import Event
-from katcp import Sensor, Message, KATCPClientResource
-from katpoint import Target, Antenna
+from katcp import Sensor, Message
 from mpikat.core.worker_pool import WorkerAllocationError
-from mpikat.core.ip_manager import ip_range_from_stream
-from mpikat.core.utils import parse_csv_antennas, LoggingSensor
+from mpikat.core.utils import LoggingSensor
+from mpikat.meerkat.katportalclient_wrapper import Interrupt
 from mpikat.meerkat.apsuse.apsuse_config import get_required_workers
-from mpikat.meerkat.apsuse.apsuse_beam_monitor import FBFUSEBeamMonitor
-
 
 log = logging.getLogger("mpikat.apsuse_product_controller")
 
@@ -52,7 +50,7 @@ class ApsProductController(object):
     STATES = ["idle", "preparing", "ready", "starting", "capturing", "stopping", "error"]
     IDLE, PREPARING, READY, STARTING, CAPTURING, STOPPING, ERROR = STATES
 
-    def __init__(self, parent, product_id, fbf_monitor, proxy_name):
+    def __init__(self, parent, product_id, katportal_client, proxy_name):
         """
         @brief      Construct new instance
 
@@ -60,7 +58,7 @@ class ApsProductController(object):
 
         @param      product_id        The name of the product
 
-        @param      fbf_monitor       An FbfKatportalMonitor instance
+        @param      katportal_client       An katportal client wrapper instance
 
         @param      proxy_name        The name of the proxy associated with this subarray (used as a sensor prefix)
 
@@ -68,18 +66,24 @@ class ApsProductController(object):
 
         @param      servers           A list of ApsWorkerServer instances allocated to this product controller
         """
-        self.log = logging.getLogger("mpikat.apsuse_product_controller.{}".format(product_id))
-        self.log.debug("Creating new ApsProductController with args: {}".format(
-            ", ".join([str(i) for i in (parent, product_id, fbf_monitor, proxy_name)])))
+        self.log = logging.getLogger(
+            "mpikat.apsuse_product_controller.{}".format(product_id))
+        self.log.debug(
+            "Creating new ApsProductController with args: {}".format(
+                ", ".join([str(i) for i in (
+                parent, product_id, katportal_client, proxy_name)])))
         self._parent = parent
         self._product_id = product_id
-        self._fbf_monitor = fbf_monitor
-        self._fbf_beam_monitor = FBFUSEBeamMonitor() #???
-        self._on_target_tracker = OnTargetTracker() #???
+        self._katportal_client = katportal_client
         self._proxy_name = proxy_name
         self._managed_sensors = []
+        self._worker_config_map = {}
         self._servers = []
+        self._fbf_sb_config = None
         self._state_interrupt = Event()
+        self._base_output_dir = "/output/"
+        self._coherent_beam_tracker = None
+        self._incoherent_beam_tracker = None
         self.setup_sensors()
 
     def __del__(self):
@@ -132,23 +136,34 @@ class ApsProductController(object):
         self._state_sensor.set_logger(self.log)
         self.add_sensor(self._state_sensor)
 
-        self._fbf_sb_config_sensor=Sensor.string(
+        self._fbf_sb_config_sensor = Sensor.string(
             "fbfuse-sb-config",
             description="The full FBFUSE schedule block configuration",
             default="",
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._fbf_sb_config_sensor)
 
-        self._servers_sensor=Sensor.string(
+        self._worker_configs_sensor = Sensor.string(
+            "worker-configs",
+            description="The configurations for each worker server",
+            default="",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._worker_configs_sensor)
+
+        self._servers_sensor = Sensor.string(
             "servers",
             description="The worker server instances currently allocated to this product",
             default=",".join(["{s.hostname}:{s.port}".format(s=server) for server in self._servers]),
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._servers_sensor)
 
-        # Server to multicast group map
-
-        # ???
+        self._data_rate_per_worker_sensor = Sensor.float(
+            "data-rate-per-worker",
+            description="The maximum ingest rate per APSUSE worker server",
+            default=6e9,
+            unit="bits/s",
+            initial_status=Sensor.NOMINAL)
+        self.add_sensor(self._data_rate_per_worker_sensor)
 
         self._parent.mass_inform(Message.inform('interface-changed'))
         self._state_sensor.set_value(self.READY)
@@ -204,53 +219,73 @@ class ApsProductController(object):
     def set_error_state(self, message):
         self._state_sensor.set_value(self.ERROR)
 
-    def deconfigure(self):
-        """
-        @brief  Deconfigure the product. To be called on a subarray deconfigure.
-
-        @detail This is the final cleanup operation for the product, it should delete all sensors
-                and ensure the release of all resource allocations.
-        """
-        self.teardown_sensors()
+    @coroutine
+    def configure(self):
+        pass
 
     @coroutine
-    def target_start(self, target):
-        """
-        @brief  Disable recording of current observation and prepare for next
-
-        @detail   Disables all writers before waiting on RETILING state
-                  on FBFUSE, after retiling, writing is re-enabled with
-                  the correct beam coordinates deployed.
-        """
-
-        # Target start implies previous target has ended
-        yield self.disable_all_writers()
-
-        @coroutine
-        def trigger_writers():
-            # Now we need to wait for all beams to be set by FBFUSE
-            # Only need to wait for beam zero to change then put a timer
-            # on to wait for all beam updates.
-            yield self._fbf_monitor.
-
-            # Wait until we are on source before dispatching the enable call
-            # if we are already on source then dispatch immediately
-
-            # This setup cannot handle on the fly retilings
-            # (but APSUSE shouldn't need to).
-            yield self.enable_writers()
-
-        self.ioloop.add_callback(trigger_writers)
+    def deconfigure(self):
+        pass
 
     @coroutine
     def disable_all_writers(self):
+        self.log.debug("Disabling all writers")
         for server in self._servers:
             yield server.disable_writers()
 
+    def set_data_rate_per_worker(self, value):
+        if (value < 1e9) or (value > 25e9):
+            log.warning("Suspect data rate set for workers: {} bits/s".format(
+                value))
+        self._data_rate_per_worker_sensor.set_value(value)
+
     @coroutine
     def enable_writers(self):
+        self.log.info("Enabling writers")
+        self.log.debug("Getting beam positions")
+        beam_map = yield self._katportal_client.get_fbfuse_coherent_beam_positions(self._product_id)
+        target_config = yield self._katportal_client.get_fbfuse_target_config(self._product_id)
+        beam_map.update({"ifbf00000": target_config["phase-reference"]})
+        self.log.debug("Beam map: {}".format(beam_map))
+
+        # Now get all information required for APSMETA file
+        output_dir = "{}/{}".format(
+            self._base_output_dir, time.strftime("%Y%m%d_%H%M%S"))
+        os.makedirs(output_dir)
+        proposal_id = yield self._katportal_client.get_proposal_id()
+        sb_id = yield self._katportal_client.get_sb_id()
+        apsuse_meta = {
+            "centre_frequency": self._fbf_sb_config["centre-frequency"],
+            "bandwidth": self._fbf_sb_config["bandwidth"],
+            "coherent_nchans": self._fbf_sb_config["nchannels"] / self._fbf_sb_config["coherent-beam-fscrunch"],
+            "coherent_tsamp": self._fbf_sb_config["coherent-beam-time-resolution"],
+            "incoherent_nchans": self._fbf_sb_config["nchannels"] / self._fbf_sb_config["incoherent-beam-fscrunch"],
+            "incoherent_tsamp": self._fbf_sb_config["incoherent-beam-time-resolution"],
+            "project_name": proposal_id,
+            "sb_id": sb_id,
+            "utc_start": time.strftime("%Y/%m/%d %H:%M:%S"),
+            #"beamshape": target_config["coherent-beam-shape"]
+        }
+
+        try:
+            with open("{}/apsuse.meta".format(output_dir), "w") as f:
+                f.write(json.dumps(apsuse_meta))
+        except Exception:
+            log.exception("Could not write apsuse.meta file")
+
+        enable_futures = []
         for server in self._servers:
-            yield server.enable_writers(self._beam_map)
+            worker_config = self._worker_config_map[server]
+            sub_beam_list = {}
+            for beam in worker_config.incoherent_beams():
+                if beam in beam_map:
+                    sub_beam_list[beam] = beam_map[beam]
+            for beam in worker_config.coherent_beams():
+                if beam in beam_map:
+                    sub_beam_list[beam] = beam_map[beam]
+            enable_futures.append(server.enable_writers(sub_beam_list, output_dir))
+        for future in enable_futures:
+            yield future
 
     @coroutine
     def capture_start(self):
@@ -258,27 +293,152 @@ class ApsProductController(object):
             raise ApsProductStateError([self.READY], self.state)
         self._state_sensor.set_value(self.STARTING)
         self.log.debug("Product moved to 'starting' state")
-        fbf_sb_config = yield self._fbf_monitor.get_sb_config()
-        yield self._fbf_monitor.subscribe_to_beams()
+        # At this point assume we do not know about the SB config and get everything fresh
+        proposal_id = yield self._katportal_client.get_proposal_id()
+        sb_id = yield self._katportal_client.get_sb_id()
+        # determine base output path
+        # /output/{proposal_id}/{sb_id}/
+        # scan number will be added to the path later
+        # The /DATA/ path is usually a mount of /beegfs/DATA/TRAPUM
+        self._base_output_dir = "/DATA/{}/{}/".format(proposal_id, sb_id)
+        self._fbf_sb_config = yield self._katportal_client.get_fbfuse_sb_config(self._product_id)
+        self._fbf_sb_config_sensor.set_value(self._fbf_sb_config)
+        self.log.debug("Determined FBFUSE config: {}".format(self._fbf_sb_config))
+        worker_configs = get_required_workers(
+            self._fbf_sb_config, self._data_rate_per_worker_sensor.value())
 
-        worker_configs = get_required_workers(fbf_sb_config)
-        capture_start_futures = []
-        for worker_config in worker_configs:
+        # allocate workers
+        self._worker_config_map = {}
+        self._servers = []
+        for config in worker_configs:
             try:
-                server = self._parent._server_pool.allocate(1)
+                server = self._parent._server_pool.allocate(1)[0]
             except WorkerAllocationError:
-                self.log.warning("Could not allocate enough workers to catch all FBFUSE data")
-                break
+                message = (
+                    "Could not allocate resources for capture of the following groups\n",
+                    "incoherent groups: {}\n".format(",".join(map(str, config.incoherent_groups()))),
+                    "coherent groups: {}\n".format(",".join(map(str, config.coherent_groups()))))
+                self.log.warning(message)
             else:
+                self._worker_config_map[server] = config
                 self._servers.append(server)
-                yield server.prepare(fbf_sb_config)
-                #capture_start_future = server.capture_start(worker_config)
-                #capture_start_futures.append(capture_start_future)
-                #
-        for future in capture_start_futures:
-            result = yield future
-            #do something with future
-        server_str = ",".join(["{s.hostname}:{s.port}".format(s=server) for server in self._servers])
+
+        # Get all common configuration parameters
+        common_config = {
+            "bandwidth": self._fbf_sb_config["bandwidth"],
+            "centre-frequency": self._fbf_sb_config["centre-frequency"],
+            "sample-clock": self._fbf_sb_config["bandwidth"] * 2,
+        }
+        common_config["sync-epoch"] = yield self._katportal_client.get_sync_epoch()
+
+        common_coherent_config = {
+            "heap-size": self._fbf_sb_config["coherent-beam-heap-size"],
+            "idx1-step": self._fbf_sb_config["coherent-beam-idx1-step"],
+            "nchans": self._fbf_sb_config["nchannels"] / self._fbf_sb_config["coherent-beam-fscrunch"],
+            "nchans-per-heap": self._fbf_sb_config["coherent-beam-subband-nchans"],
+            "sampling-interval": self._fbf_sb_config["coherent-beam-time-resolution"],
+            "base-output-dir": "{}".format(self._base_output_dir),
+            "filesize": 1e9
+        }
+
+        common_incoherent_config = {
+            "heap-size": self._fbf_sb_config["incoherent-beam-heap-size"],
+            "idx1-step": self._fbf_sb_config["incoherent-beam-idx1-step"],
+            "nchans": self._fbf_sb_config["nchannels"] / self._fbf_sb_config["incoherent-beam-fscrunch"],
+            "nchans-per-heap": self._fbf_sb_config["incoherent-beam-subband-nchans"],
+            "sampling-interval": self._fbf_sb_config["incoherent-beam-time-resolution"],
+            "base-output-dir": "{}".format(self._base_output_dir),
+            "filesize": 1e9
+        }
+
+        configure_futures = []
+        all_server_configs = {}
+        for server, config in self._worker_config_map.items():
+            server_config = {}
+            if config.incoherent_groups():
+                incoherent_config = deepcopy(common_config)
+                incoherent_config.update(common_incoherent_config)
+                incoherent_config["beam-ids"] = []
+                incoherent_config["stream-indices"] = []
+                incoherent_config["mcast-groups"] = []
+                incoherent_config["mcast-port"] = 7147  # Where should this info come from?
+                for beam in config.incoherent_beams():
+                    incoherent_config["beam-ids"].append(beam)
+                    incoherent_config["stream-indices"].append(int(beam.lstrip("ifbf")))
+                incoherent_config["mcast-groups"].extend(map(str, config.incoherent_groups()))
+                server_config["incoherent-beams"] = incoherent_config
+            if config.coherent_groups():
+                coherent_config = deepcopy(common_config)
+                coherent_config.update(common_coherent_config)
+                coherent_config["beam-ids"] = []
+                coherent_config["stream-indices"] = []
+                coherent_config["mcast-groups"] = []
+                coherent_config["mcast-port"] = 7147  # Where should this info come from?
+                for beam in config.coherent_beams():
+                    coherent_config["beam-ids"].append(beam)
+                    coherent_config["stream-indices"].append(int(beam.lstrip("cfbf")))
+                coherent_config["mcast-groups"].extend(map(str, config.coherent_groups()))
+                server_config["coherent-beams"] = coherent_config
+            configure_futures.append(server.configure(server_config))
+            all_server_configs[server] = server_config
+            self.log.info("Configuration for server {}: {}".format(
+                server, server_config))
+        self._worker_configs_sensor.set_value(all_server_configs)
+        for future in configure_futures:
+            yield future
+
+        # At this point we do the data-suspect tracking start
+        self._coherent_beam_tracker = self._katportal_client.get_sensor_tracker(
+            "fbfuse", "fbfmc_{}_coherent_beam_data_suspect".format(
+                self._product_id))
+        self._incoherent_beam_tracker = self._katportal_client.get_sensor_tracker(
+            "fbfuse", "fbfmc_{}_incoherent_beam_data_suspect".format(
+                self._product_id))
+        self.log.info("Starting FBFUSE data-suspect tracking")
+        yield self._coherent_beam_tracker.start()
+        yield self._incoherent_beam_tracker.start()
+
+        @coroutine
+        def wait_for_on_target():
+            self.log.info("Waiting for data-suspect flags to become False")
+            self._state_interrupt.clear()
+            try:
+                yield self._coherent_beam_tracker.wait_until(
+                    False, self._state_interrupt)
+                yield self._incoherent_beam_tracker.wait_until(
+                    False, self._state_interrupt)
+            except Interrupt:
+                self.log.debug("data-suspect tracker interrupted")
+                pass
+            else:
+                self.log.info("data-suspect flags now False (on target)")
+                try:
+                    yield self.disable_all_writers()
+                    yield self.enable_writers()
+                except Exception:
+                    log.exception("error")
+                self._parent.ioloop.add_callback(wait_for_off_target)
+
+        @coroutine
+        def wait_for_off_target():
+            self.log.info("Waiting for data-suspect flags to become True")
+            self._state_interrupt.clear()
+            try:
+                yield self._coherent_beam_tracker.wait_until(
+                    True, self._state_interrupt)
+                yield self._incoherent_beam_tracker.wait_until(
+                    True, self._state_interrupt)
+            except Interrupt:
+                self.log.debug("data-suspect tracker interrupted")
+                pass
+            else:
+                self.log.info("data-suspect flags now True (off-target/retiling)")
+                yield self.disable_all_writers()
+                self._parent.ioloop.add_callback(wait_for_on_target)
+
+        self._parent.ioloop.add_callback(wait_for_on_target)
+        server_str = ",".join(["{s.hostname}:{s.port}".format(
+            s=server) for server in self._servers])
         self._servers_sensor.set_value(server_str)
         self._state_sensor.set_value(self.CAPTURING)
         self.log.debug("Product moved to 'capturing' state")
@@ -295,13 +455,26 @@ class ApsProductController(object):
         """
         if not self.capturing and not self.error:
             return
-
-        yield self._fbf_monitor.unsubscribe_from_beams()
         self._state_sensor.set_value(self.STOPPING)
-        self.target_stop()
+        self._state_interrupt.set()
 
-        # talk to servers and do something clever
+        if self._coherent_beam_tracker:
+            yield self._coherent_beam_tracker.stop()
+            self._coherent_beam_tracker = None
+        if self._incoherent_beam_tracker:
+            yield self._incoherent_beam_tracker.stop()
+            self._incoherent_beam_tracker = None
 
-        # deallocate servers
-
+        yield self.disable_all_writers()
+        deconfigure_futures = []
+        for server in self._worker_config_map.keys():
+            self.log.info("Sending deconfigure to server {}".format(server))
+            deconfigure_futures.append(server.deconfigure())
+        for future in deconfigure_futures:
+            yield future
+        self._parent._server_pool.deallocate(self._worker_config_map.keys())
+        self.log.info("Deallocated all servers")
+        self._worker_config_map = {}
+        self._servers_sensor.set_value("")
         self._state_sensor.set_value(self.READY)
+

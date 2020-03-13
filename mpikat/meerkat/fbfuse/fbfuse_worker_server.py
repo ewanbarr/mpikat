@@ -389,6 +389,22 @@ class FbfWorkerServer(AsyncDeviceServer):
         else:
             return ("ok",)
 
+    @request()
+    @return_reply()
+    def request_reset(self, req):
+        """
+        @brief    Request the docker container housing this server gets restarted
+
+        @detail   This is an apocalyptic command that will erase the state of the
+                  current instance completely and reset it back to fresh
+        """
+        # First get the docker container ID
+        with open("/proc/self/cgroup", "r") as f:
+            line = f.readline()
+            idx = line.split("/")[-1].strip()
+        req.reply("ok,")
+        os.system("docker restart {}".format(idx))
+
     @request(Str(), Int(), Int(), Float(), Float(), Str(), Str(),
              Str(), Str(), Int())
     @return_reply()
@@ -729,7 +745,7 @@ class FbfWorkerServer(AsyncDeviceServer):
 	    nants = len(feng_capture_order_info['order'])
             self._gain_buffer_ctrl = GainBufferController(nants, partition_nchans, 2)
             self._gain_buffer_ctrl.create()
-            self._gain_buffer_ctrl.update_gains() 
+            self._gain_buffer_ctrl.update_gains()
 
             # Start DelayBufferController instance
             # Here we are going to make the assumption that the server and processing all run in
@@ -872,7 +888,7 @@ class FbfWorkerServer(AsyncDeviceServer):
             "--delay_key_root", delay_buffer_key,
             "--gain_key_root", gain_buffer_key,
             "--level_trigger_sem", self._autoscaling_key,
-            "--output_level", self._output_level, 
+            "--output_level", self._output_level,
             "--cfreq", self._centre_frequency,
             "--bandwidth", self._partition_bandwidth,
             "--log_level", "info"]

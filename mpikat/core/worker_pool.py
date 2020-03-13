@@ -207,6 +207,14 @@ class WorkerWrapper(object):
         self._client.start()
         self._started = True
 
+    @coroutine
+    def reset(self):
+        yield self._client.until_synced()
+        response = yield self._client.req.reset()
+        if not response.reply.reply_ok():
+            raise WorkerRequestError(response.reply.arguments[1])
+        raise Return(response.informs[0].arguments[-1])
+
     def is_connected(self):
         return self._client.is_connected()
 

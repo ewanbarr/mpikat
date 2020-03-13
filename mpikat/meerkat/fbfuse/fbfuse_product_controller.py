@@ -555,6 +555,15 @@ class FbfProductController(object):
         self._ca_address_sensor.set_value("{}:{}".format(hostname, port))
 
     @coroutine
+    def reset_workers(self):
+        for server in self.servers:
+            try:
+                yield server.reset()
+            except Exception as error:
+                log.exception("Could not reset worker '{}' with error: {}".format(
+                    str(server), str(error)))
+
+    @coroutine
     def get_sb_configuration(self, sb_id):
         if self._ca_client:
             config = yield self.get_ca_sb_configuration(sb_id)

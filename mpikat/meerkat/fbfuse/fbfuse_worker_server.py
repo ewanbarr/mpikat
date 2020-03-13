@@ -390,7 +390,6 @@ class FbfWorkerServer(AsyncDeviceServer):
             return ("ok",)
 
     @request()
-    @return_reply()
     def request_reset(self, req):
         """
         @brief    Request the docker container housing this server gets restarted
@@ -404,7 +403,7 @@ class FbfWorkerServer(AsyncDeviceServer):
             idx = line.split("/")[-1].strip()
         req.reply("ok,")
         os.system("docker restart {}".format(idx))
-    
+
     @request(Str(), Float(), Float(), Float(), Str())
     @return_reply()
     def request_trigger_tb_dump(self, req, utc_start, width, dm, ref_freq, trigger_id):

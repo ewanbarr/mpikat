@@ -47,6 +47,7 @@ class FbfWorkerWrapper(WorkerWrapper):
         response = yield req(*args, **kwargs)
         if not response.reply.reply_ok():
             raise WorkerRequestError(response.reply.arguments[1])
+        raise Return(response)
 
     @coroutine
     def prepare(self, *args, **kwargs):
@@ -71,6 +72,11 @@ class FbfWorkerWrapper(WorkerWrapper):
     @coroutine
     def rescale(self, *args, **kwargs):
         yield self._make_request(self._client.req.rescale, *args, **kwargs)
+
+    @coroutine
+    def trigger_tb_dump(self, *args, **kwargs):
+        yield self._make_request(self._client.req.trigger_tb_dump, *args, **kwargs)
+
 
 class FbfWorkerPool(WorkerPool):
 

@@ -971,6 +971,21 @@ class FbfProductController(object):
                         self._servers[ii], str(error)))
 
     @coroutine
+    def trigger_tb_dump(self, utc_start, width, dm, ref_freq, trigger_id):
+        if not self.capturing:
+            raise FbfProductStateError([self.CAPTURING], self.state)
+        futures = []
+        for server in self._servers:
+            futures.append(server.trigger_tb_dump(utc_start, width, dm, ref_freq, trigger_id))
+        for ii, future in enumerate(futures):
+            try:
+                yield future
+            except Exception as error:
+                log.exception(
+                    "Error running TB dump on server {}: {}".format(
+                        self._servers[ii], str(error)))
+
+    @coroutine
     def prepare(self, sb_id):
         """
         @brief      Prepare the beamformer for streaming
@@ -1113,7 +1128,7 @@ class FbfProductController(object):
             self._previous_sb_config = sb_config
             self._state_sensor.set_value(self.READY)
             self.log.info("Successfully prepared FBFUSE product")
-        yield self.set_levels(10.0)
+        yield self.set_levels(7.0)
         yield self._activity_tracker.start()
 
     @coroutine

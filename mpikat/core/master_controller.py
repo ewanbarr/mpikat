@@ -219,6 +219,7 @@ class MasterController(AsyncDeviceServer):
             self._server_pool.available()))
 
     @request(Str())
+    @return_reply()
     @coroutine
     def request_reset_workers(self, req, product_id):
         """
@@ -229,16 +230,14 @@ class MasterController(AsyncDeviceServer):
             product = self._get_product(product_id)
         except Exception as error:
             log.exception("Could not reset workers with error: {}".format(str(error)))
-            req.reply("fail", str(error))
-            raise Return(None)
+            raise Return(("fail", str(error)))
         try:
             yield product.reset_workers()
         except Exception as error:
             log.exception("Could not reset workers with error: {}".format(str(error)))
-            req.reply("fail", str(error))
-            raise Return(None)
+            raise Return(("fail", str(error)))
         else:
-            req.reply("ok")
+            raise Return(("ok",))
 
     @request()
     @return_reply(Int())

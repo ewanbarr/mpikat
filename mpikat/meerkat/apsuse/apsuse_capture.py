@@ -176,7 +176,7 @@ class ApsCapture(object):
             "--size", int(config['filesize']),
             "--socket", self._control_socket,
             "--dir", config["base-output-dir"],
-            "--log_level", "debug"]
+            "--log_level", "info"]
         log.info("Starting APSUSE")
         log.debug(" ".join(map(str, apsuse_cmdline)))
         self._apsuse_proc = ManagedProcess(

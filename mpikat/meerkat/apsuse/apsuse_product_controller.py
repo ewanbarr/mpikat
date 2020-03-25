@@ -115,7 +115,7 @@ class ApsProductController(object):
         if sensor.name.startswith(prefix):
             self._parent.add_sensor(sensor)
         else:
-            sensor.name = "{}{}".format(prefix,sensor.name)
+            sensor.name = "{}{}".format(prefix, sensor.name)
             self._parent.add_sensor(sensor)
         self._managed_sensors.append(sensor)
 
@@ -164,6 +164,21 @@ class ApsProductController(object):
             unit="bits/s",
             initial_status=Sensor.NOMINAL)
         self.add_sensor(self._data_rate_per_worker_sensor)
+
+        self._current_recording_directory_sensor = Sensor.string(
+            "current-recording-directory",
+            description="The current directory for recording from this subarray",
+            default="",
+            initial_status=Sensor.UNKNOWN
+            )
+        self.add_sensor(self._current_recording_directory_sensor)
+
+        self._current_recording_sensor = Sensor.string(
+            "recording-params",
+            description="The parameters of the current APSUSE recording",
+            default="",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._current_recording_sensor)
 
         self._parent.mass_inform(Message.inform('interface-changed'))
         self._state_sensor.set_value(self.READY)
@@ -268,9 +283,28 @@ class ApsProductController(object):
             "project_name": proposal_id,
             "sb_id": sb_id,
             "utc_start": time.strftime("%Y/%m/%d %H:%M:%S"),
+            "ouput_dir": output_dir.replace("/DATA/", "/beegfs/DATA/TRAPUM/"),
             #"beamshape": target_config["coherent-beam-shape"]
         }
 
+        # Generate user friendly formatting for the current recording:
+        format_mapping = (
+            ("Centre frequency:", "centre_frequency", "Hz"),
+            ("Bandwidth:", "bandwidth", "Hz"),
+            ("CB Nchannels:", "coherent_nchans", ""),
+            ("CB sampling:", "coherent_tsamp", "s"),
+            ("IB Nchannels:", "incoherent_nchans", ""),
+            ("IB sampling:", "incoherent_tsamp", "s"),
+            ("Project ID:", "project_name", ""),
+            ("SB ID:", "sb_id", ""),
+            ("UTC start:", "utc_start", ""),
+            ("Directory:", "output_dir", "")
+            )
+        formatted_apsuse_meta = "<br />".join(("<font color='lightblue'><b>{}</b></font> {} {}".format(name,
+            apsuse_meta[key], unit) for name, key, unit in format_mapping))
+        formatted_apsuse_meta = "<p>{}</p>".format(formatted_apsuse_meta)
+        self._current_recording_sensor.set_value(formatted_apsuse_meta)
+        self._current_recording_directory_sensor.set_value(output_dir)
         try:
             with open("{}/apsuse.meta".format(output_dir), "w") as f:
                 f.write(json.dumps(apsuse_meta))

@@ -30,12 +30,11 @@ IBV_MAX_POLL  10
 BUFFER_SIZE   33554432
 PACKET_SIZE   9000
 SAMPLE_CLOCK_START unset
-NTHREADS      6
+NTHREADS      {{nthreads}}
 NHEAPS        64
-NGROUPS_DATA  {{ngroups_data}}
-LEVEL_DATA    50
-LEVEL_TEMP    50
-HEAP_SIZE     {{heap_size}}
+HEAP_NBYTES     {{heap_size}}
+DADA_NSLOTS 4
+SLOTS_SKIP 4
 
 NINDICES    3
 IDX1_ITEM   0
@@ -48,7 +47,6 @@ IDX2_LIST   {{beam_ids_csv}}
 IDX3_ITEM   2
 IDX3_LIST   {{freq_ids_csv}}
 """
-
 
 MKRECV_STDOUT_KEYS = {
     "STAT": [("slot-size", int),

@@ -52,16 +52,32 @@ IDX3_LIST   {{freq_ids_csv}}
 
 MKRECV_STDOUT_KEYS = {
     "STAT": [("slot-size", int),
-             ("heaps-completed", int),
-             ("heaps-discarded", int),
-             ("heaps-needed", int),
-             ("payload-expected", int),
-             ("payload-received", int),
-             ("global-heaps-completed", int),
-             ("global-heaps-discarded", int),
-             ("global-heaps-needed", int),
-             ("global-payload-expected", int),
-             ("global-payload-received", int)]
+             None,
+             ("slot.heaps-completed", int),
+             ("slot.heaps-discarded", int),
+             ("slot.heaps-open", int),
+             ("slot.bytes-expected", int),
+             ("slot.bytes-received", int),
+             None,
+             ("total.heaps-completed", int),
+             ("total.heaps-discarded", int),
+             ("total.heaps-open", int),
+             ("total.bytes-expected", int),
+             ("total.bytes-received", int),
+             None,
+             ("trash.heaps-completed", int),
+             ("trash.heaps-discarded", int),
+             ("trash.heaps-open", int),
+             ("trash.bytes-expected", int),
+             ("trash.bytes-received", int),
+             None,
+             ("age.too-old", int),
+             ("age.valid", int),
+             ("age.too-new", int),
+             None,
+             ("timestamp.head", int),
+             ("timestamp.current", int),
+             ("timestamp.last", int)]
 }
 
 
@@ -89,10 +105,10 @@ class MkrecvStdoutHandler(object):
         params = mkrecv_stdout_parser(line)
         if not params:
             return
-        self._current_percentage = (100 * params['heaps-completed']
+        self._current_percentage = (100 * params['slot.heaps-completed']
                                     / float(params['slot-size']))
-        self._total_percentage = (100 * params['global-payload-received']
-                                  / float(params['global-payload-expected']))
+        self._total_percentage = (100 * params['total.bytes-received']
+                                  / float(params['trash.bytes-expected']))
         self._stats_buffer.append(self._current_percentage)
         self._average_percentage = (
             sum(self._stats_buffer)/len(self._stats_buffer))
@@ -157,6 +173,9 @@ def mkrecv_stdout_parser(line):
     if tokens[0] in MKRECV_STDOUT_KEYS:
         params = {}
         parser = MKRECV_STDOUT_KEYS[tokens[0]]
-        for ii, (key, dtype) in enumerate(parser):
+        for ii, value in enumerate(parser):
+            if value is None:
+                continue
+            key, dtype = value
             params[key] = dtype(tokens[ii+1])
     return params

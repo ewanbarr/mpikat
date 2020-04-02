@@ -106,7 +106,7 @@ class MkrecvStdoutHandler(object):
         self._current_percentage = (100 * params['slot.heaps-completed']
                                     / float(params['slot-size']))
         self._total_percentage = (100 * params['total.bytes-received']
-                                  / float(params['trash.bytes-expected']))
+                                  / float(params['total.bytes-expected']))
         self._stats_buffer.append(self._current_percentage)
         self._average_percentage = (
             sum(self._stats_buffer)/len(self._stats_buffer))

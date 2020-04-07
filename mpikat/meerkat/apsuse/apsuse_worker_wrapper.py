@@ -28,6 +28,18 @@ from mpikat.core.worker_pool import WorkerPool, WorkerWrapper, WorkerRequestErro
 log = logging.getLogger("mpikat.apsuse_worker_wrapper")
 
 
+HOST_PRIORITIES = {
+    "apscn00.mpifr-be.mkat.karoo.kat.ac.za": 8,
+    "apscn01.mpifr-be.mkat.karoo.kat.ac.za": 7,
+    "apscn02.mpifr-be.mkat.karoo.kat.ac.za": 6,
+    "apscn03.mpifr-be.mkat.karoo.kat.ac.za": 5,
+    "apscn04.mpifr-be.mkat.karoo.kat.ac.za": 4,
+    "apscn05.mpifr-be.mkat.karoo.kat.ac.za": 3,
+    "apscn06.mpifr-be.mkat.karoo.kat.ac.za": 2,
+    "apscn07.mpifr-be.mkat.karoo.kat.ac.za": 1
+}
+
+
 class ApsWorkerWrapper(WorkerWrapper):
     """Wrapper around a client to an ApsWorkerServer
     instance.
@@ -40,6 +52,7 @@ class ApsWorkerWrapper(WorkerWrapper):
         @params port     The port number that the worker server serves on
         """
         super(ApsWorkerWrapper, self).__init__(hostname, port)
+        self.priority = HOST_PRIORITIES.get(hostname, 0)
 
     @coroutine
     def _make_request(self, req, *args, **kwargs):

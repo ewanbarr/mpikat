@@ -2,6 +2,7 @@ import logging
 import json
 import os
 import psutil
+import time
 from subprocess import Popen, PIPE
 import itertools
 from tornado.gen import coroutine, sleep
@@ -111,6 +112,8 @@ class ApsCapture(object):
             yield sleep(1.0)
             if time.time() - start > timeout:
                 raise Exception("Caching of DADA buffer took longer than {} seconds".format(timeout))
+        log.info("Took {} seconds to allocate {}x{} GB DADA buffer".format(
+            time.time()-start, block_size/1e9, nblocks))
 
     def _stop_db(self):
         log.debug("Destroying DADA buffer")

@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import psutil
 from subprocess import Popen, PIPE
 import itertools
 from tornado.gen import coroutine, sleep
@@ -16,7 +17,7 @@ from mpikat.utils.unix_socket import UDSClient
 AVAILABLE_CAPTURE_MEMORY = 3221225472 * 10
 MAX_DADA_BLOCK_SIZE = 1 << 30
 OPTIMAL_BLOCK_LENGTH = 10.0  # seconds
-OPTIMAL_CAPTURE_BLOCKS = 10
+OPTIMAL_CAPTURE_BLOCKS = 16
 
 log = logging.getLogger("mpikat.apsuse_capture")
 os.environ["OMP_NUM_THREADS"] = "12"
@@ -93,7 +94,7 @@ class ApsCapture(object):
         self.add_sensor(self._ingress_buffer_percentage)
 
     @coroutine
-    def _start_db(self, key, block_size, nblocks, wait=10.0):
+    def _start_db(self, key, block_size, nblocks, timeout=100.0):
         log.debug(("Building DADA buffer: key={}, block_size={}, "
             "nblocks={}").format(key, block_size, nblocks))
         cmdline = map(str,
@@ -104,7 +105,12 @@ class ApsCapture(object):
             cmdline, stdout=PIPE,
             stderr=PIPE, shell=False,
             close_fds=True)
-        yield sleep(wait)
+        start = time.time()
+        while psutil.virtual_memory().cached < block_size * nblocks:
+            log.info("Cached: {} bytes, require {} bytes".format(psutil.virtual_memory().cached, block_size * nblocks))
+            yield sleep(1.0)
+            if time.time() - start > timeout:
+                raise Exception("Caching of DADA buffer took longer than {} seconds".format(timeout))
 
     def _stop_db(self):
         log.debug("Destroying DADA buffer")
@@ -138,7 +144,6 @@ class ApsCapture(object):
         # Make DADA buffer and start watchers
         log.info("Creating capture buffer")
         capture_block_size = ngroups_data * heap_group_size
-
         if (capture_block_size * OPTIMAL_CAPTURE_BLOCKS > AVAILABLE_CAPTURE_MEMORY):
             capture_block_count = int(AVAILABLE_CAPTURE_MEMORY / capture_block_size)
             if capture_block_count < 3:
@@ -150,6 +155,7 @@ class ApsCapture(object):
             "%s" % self._dada_input_key))
         yield self._start_db(self._dada_input_key, capture_block_size,
             capture_block_count)
+        log.info("Capture buffer ready")
         self._config_sensor.set_value(json.dumps(config))
         idx = 0
         for beam in config['beam-ids']:
@@ -175,6 +181,7 @@ class ApsCapture(object):
         self._apsuse_proc = ManagedProcess(
             apsuse_cmdline, stdout_handler=log.debug, stderr_handler=log.error)
         self._apsuse_args_sensor.set_value(" ".join(map(str, apsuse_cmdline)))
+        yield sleep(5)
 
         def make_beam_list(indices):
             spec = ""
@@ -232,6 +239,7 @@ class ApsCapture(object):
              self._mkrecv_config_filename, "--quiet"],
             stdout_handler=mkrecv_aggregated_output_handler,
             stderr_handler=log.error)
+        yield sleep(5)
 
         def exit_check_callback():
             if not self._mkrecv_proc.is_alive():

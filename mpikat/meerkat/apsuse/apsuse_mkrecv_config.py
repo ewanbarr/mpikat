@@ -34,7 +34,7 @@ NTHREADS      {{nthreads}}
 NHEAPS        64
 HEAP_NBYTES     {{heap_size}}
 DADA_NSLOTS 4
-SLOTS_SKIP 4
+SLOTS_SKIP 8
 
 NINDICES    3
 IDX1_ITEM   0

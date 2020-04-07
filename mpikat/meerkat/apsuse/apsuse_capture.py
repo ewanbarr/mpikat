@@ -1,8 +1,11 @@
 import logging
 import json
+import os
+import psutil
+import time
 from subprocess import Popen, PIPE
 import itertools
-from tornado.gen import coroutine
+from tornado.gen import coroutine, sleep
 from tornado.ioloop import IOLoop, PeriodicCallback
 from katpoint import Target
 from katcp import Sensor
@@ -15,9 +18,10 @@ from mpikat.utils.unix_socket import UDSClient
 AVAILABLE_CAPTURE_MEMORY = 3221225472 * 10
 MAX_DADA_BLOCK_SIZE = 1 << 30
 OPTIMAL_BLOCK_LENGTH = 10.0  # seconds
-OPTIMAL_CAPTURE_BLOCKS = 6
+OPTIMAL_CAPTURE_BLOCKS = 16
 
 log = logging.getLogger("mpikat.apsuse_capture")
+os.environ["OMP_NUM_THREADS"] = "12"
 
 
 class ApsCapture(object):
@@ -37,6 +41,7 @@ class ApsCapture(object):
         self._dada_input_key = dada_key
         self._mkrecv_proc = None
         self._apsuse_proc = None
+        self._dada_db_proc = None
         self._ingress_buffer_monitor = None
         self._internal_beam_mapping = {}
         self._sensors = []
@@ -90,35 +95,32 @@ class ApsCapture(object):
         self.add_sensor(self._ingress_buffer_percentage)
 
     @coroutine
-    def _make_db(self, key, block_size, nblocks, timeout=120):
-        try:
-            yield self._destroy_db(key, timeout=20)
-        except Exception as error:
-            log.debug("Could not clean previous buffer (key={}): {}".format(
-                key, str(error)))
+    def _start_db(self, key, block_size, nblocks, timeout=100.0):
         log.debug(("Building DADA buffer: key={}, block_size={}, "
-                   "nblocks={}").format(key, block_size, nblocks))
-        cmdline = map(str, ["dada_db", "-k", key, "-b", block_size, "-n",
-                            nblocks, "-l", "-p"])
-        proc = Popen(
+            "nblocks={}").format(key, block_size, nblocks))
+        cmdline = map(str,
+            ["dada_db", "-k", key, "-b",
+            block_size, "-n",
+            nblocks, "-l", "-p", "-w"])
+        self._dada_db_proc = Popen(
             cmdline, stdout=PIPE,
             stderr=PIPE, shell=False,
             close_fds=True)
-        yield process_watcher(
-            proc, name="make_db({})".format(key),
-            timeout=timeout)
+        start = time.time()
+        while psutil.virtual_memory().cached < block_size * nblocks:
+            log.info("Cached: {} bytes, require {} bytes".format(psutil.virtual_memory().cached, block_size * nblocks))
+            yield sleep(1.0)
+            if time.time() - start > timeout:
+                raise Exception("Caching of DADA buffer took longer than {} seconds".format(timeout))
+        log.info("Took {} seconds to allocate {}x{} GB DADA buffer".format(
+            time.time()-start, block_size/1e9, nblocks))
 
-    @coroutine
-    def _destroy_db(self, key, timeout=20.0):
-        log.debug("Destroying DADA buffer with key={}".format(key))
-        cmdline = map(str, ["dada_db", "-k", key, "-d"])
-        proc = Popen(
-            cmdline, stdout=PIPE,
-            stderr=PIPE, shell=False,
-            close_fds=True)
-        yield process_watcher(
-            proc, name="destroy_db({})".format(key),
-            timeout=timeout)
+    def _stop_db(self):
+        log.debug("Destroying DADA buffer")
+        if self._dada_db_proc is not None:
+            self._dada_db_proc.terminate()
+            self._dada_db_proc.wait()
+        self._dada_db_proc = None
 
     @coroutine
     def capture_start(self, config):
@@ -129,7 +131,7 @@ class ApsCapture(object):
         # desired beams here is a list of beam IDs, e.g. [1,2,3,4,5]
         heap_group_size = config['heap-size'] * nbeams * npartitions
 
-        heap_group_duration = (heap_group_size / config['nchans-per-heap']) * config['sampling-interval']
+        #heap_group_duration = (heap_group_size / config['nchans-per-heap']) * config['sampling-interval']
         #optimal_heap_groups = int(OPTIMAL_BLOCK_LENGTH / heap_group_duration)
         #if (optimal_heap_groups * heap_group_size) > MAX_DADA_BLOCK_SIZE:
         ngroups_data = int(MAX_DADA_BLOCK_SIZE / heap_group_size)
@@ -145,7 +147,6 @@ class ApsCapture(object):
         # Make DADA buffer and start watchers
         log.info("Creating capture buffer")
         capture_block_size = ngroups_data * heap_group_size
-
         if (capture_block_size * OPTIMAL_CAPTURE_BLOCKS > AVAILABLE_CAPTURE_MEMORY):
             capture_block_count = int(AVAILABLE_CAPTURE_MEMORY / capture_block_size)
             if capture_block_count < 3:
@@ -155,8 +156,9 @@ class ApsCapture(object):
 
         log.debug("Creating dada buffer for input with key '{}'".format(
             "%s" % self._dada_input_key))
-        yield self._make_db(self._dada_input_key, capture_block_size,
+        yield self._start_db(self._dada_input_key, capture_block_size,
             capture_block_count)
+        log.info("Capture buffer ready")
         self._config_sensor.set_value(json.dumps(config))
         idx = 0
         for beam in config['beam-ids']:
@@ -182,6 +184,7 @@ class ApsCapture(object):
         self._apsuse_proc = ManagedProcess(
             apsuse_cmdline, stdout_handler=log.debug, stderr_handler=log.error)
         self._apsuse_args_sensor.set_value(" ".join(map(str, apsuse_cmdline)))
+        yield sleep(5)
 
         def make_beam_list(indices):
             spec = ""
@@ -207,13 +210,13 @@ class ApsCapture(object):
                 'sync_epoch': config['sync-epoch'],
                 'sample_clock': config['sample-clock'],
                 'mcast_sources': ",".join(config['mcast-groups']),
+                'nthreads': len(config['mcast-groups'])+1,
                 'mcast_port': str(config['mcast-port']),
                 'interface': self._capture_interface,
                 'timestamp_step': config['idx1-step'],
                 'timestamp_modulus': 1,
                 'beam_ids_csv': make_beam_list(config['stream-indices']),
                 'freq_ids_csv': "0:{}:{}".format(config['nchans'], config['nchans-per-heap']),
-                'ngroups_data': ngroups_data,
                 'heap_size': config['heap-size']
             }
         mkrecv_header = make_mkrecv_header(
@@ -235,10 +238,11 @@ class ApsCapture(object):
         log.info("Starting MKRECV")
         self._mkrecv_proc = ManagedProcess(
             ["taskset", "-c", self._mkrecv_cpu_set,
-             "mkrecv_nt", "--header",
+             "mkrecv_rnt", "--header",
              self._mkrecv_config_filename, "--quiet"],
             stdout_handler=mkrecv_aggregated_output_handler,
             stderr_handler=log.error)
+        yield sleep(5)
 
         def exit_check_callback():
             if not self._mkrecv_proc.is_alive():
@@ -360,10 +364,7 @@ class ApsCapture(object):
         log.info("Stopping PSRDADA_CPP instance")
         self._apsuse_proc.terminate()
         log.info("Destroying DADA buffers")
-        try:
-            yield self._destroy_db(self._dada_input_key, timeout=10.0)
-        except Exception as error:
-            log.warning("Error raised on DB destroy: {}".format(str(error)))
+        self._stop_db()
 
 
 if __name__ == "__main__":

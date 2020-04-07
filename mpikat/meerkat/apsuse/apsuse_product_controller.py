@@ -283,7 +283,7 @@ class ApsProductController(object):
             "project_name": proposal_id,
             "sb_id": sb_id,
             "utc_start": time.strftime("%Y/%m/%d %H:%M:%S"),
-            "ouput_dir": output_dir.replace("/DATA/", "/beegfs/DATA/TRAPUM/"),
+            "output_dir": output_dir.replace("/DATA/", "/beegfs/DATA/TRAPUM/"),
             #"beamshape": target_config["coherent-beam-shape"]
         }
 

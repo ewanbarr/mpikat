@@ -859,7 +859,6 @@ class FbfMasterController(MasterController):
         @param      ref_freq:    The reference frequency in Hz
         @param      trigger_id:  A unique trigger identifier
         """
-
 	@coroutine 
         def wrapper():
 	    try:
@@ -874,7 +873,8 @@ class FbfMasterController(MasterController):
             product = self._get_product(product_id)
         except ProductLookupError as error:
             req.reply("fail", str(error))
-	self.ioloop.add_callback(wrapper)
+        else:
+	    self.ioloop.add_callback(wrapper)
 	raise AsyncReply
 
 @coroutine

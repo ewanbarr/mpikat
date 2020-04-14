@@ -244,7 +244,6 @@ class ApsWorkerServer(AsyncDeviceServer):
         futures = []
         for capture_instance in self._capture_instances:
             capture_instance.target_stop()
-            futures.append(capture_instance.capture_stop())
             for sensor in capture_instance._sensors:
                 try:
                     self.remove_sensor(sensor)
@@ -252,6 +251,8 @@ class ApsWorkerServer(AsyncDeviceServer):
                     log.exception(
                         "Failed to remove sensor with error: {}".format(
                             str(error)))
+                    log.warning("Current sensor list: {}".format(self._sensors))
+            futures.append(capture_instance.capture_stop())
         self.mass_inform(Message.inform('interface-changed'))
         for future in futures:
             try:

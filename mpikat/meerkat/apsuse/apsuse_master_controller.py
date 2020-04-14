@@ -24,9 +24,11 @@ import coloredlogs
 import json
 import tornado
 import signal
+from subprocess import check_output
 from optparse import OptionParser
 from tornado.gen import Return, coroutine
-from katcp import AsyncReply
+from tornado.ioloop import PeriodicCallback
+from katcp import AsyncReply, Sensor
 from katcp.kattypes import request, return_reply, Str, Float
 from katpoint import Target
 from mpikat.core.master_controller import MasterController
@@ -68,6 +70,29 @@ class ApsMasterController(MasterController):
         if self._dummy:
             for ii in range(8):
                 self._server_pool.add("127.0.0.1", 50000+ii)
+
+    def setup_sensors(self):
+        super(ApsMasterController, self).setup_sensors()
+        self._disk_fill_level_sensor = Sensor.float(
+            "beegfs-fill-level",
+            description="The percentage fill level of the BeeGFS cluster",
+            default=0.0,
+            unit="percentage",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._disk_fill_level_sensor)
+
+        def check_disk_fill_level():
+            try:
+                used, avail = map(float, check_output(["df", "/DATA/"]
+                    ).splitlines()[1].split()[2:4])
+                percent_used = 100.0 * used / (used + avail)
+                self._disk_fill_level_sensor.set_value(percent_used)
+            except Exception as error:
+                log.warning("Failed to check disk usage level: {}".format(
+                    str(error)))
+        self._disk_fill_callback = PeriodicCallback(
+            check_disk_fill_level, 60 * 1000)
+        self._disk_fill_callback.start()
 
     @request(Str(), Str(), Str())
     @return_reply()

@@ -115,7 +115,7 @@ class ApsProductController(object):
         if sensor.name.startswith(prefix):
             self._parent.add_sensor(sensor)
         else:
-            sensor.name = "{}{}".format(prefix,sensor.name)
+            sensor.name = "{}{}".format(prefix, sensor.name)
             self._parent.add_sensor(sensor)
         self._managed_sensors.append(sensor)
 
@@ -164,6 +164,21 @@ class ApsProductController(object):
             unit="bits/s",
             initial_status=Sensor.NOMINAL)
         self.add_sensor(self._data_rate_per_worker_sensor)
+
+        self._current_recording_directory_sensor = Sensor.string(
+            "current-recording-directory",
+            description="The current directory for recording from this subarray",
+            default="",
+            initial_status=Sensor.UNKNOWN
+            )
+        self.add_sensor(self._current_recording_directory_sensor)
+
+        self._current_recording_sensor = Sensor.string(
+            "recording-params",
+            description="The parameters of the current APSUSE recording",
+            default="",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._current_recording_sensor)
 
         self._parent.mass_inform(Message.inform('interface-changed'))
         self._state_sensor.set_value(self.READY)
@@ -231,7 +246,11 @@ class ApsProductController(object):
     def disable_all_writers(self):
         self.log.debug("Disabling all writers")
         for server in self._servers:
-            yield server.disable_writers()
+            try:
+                yield server.disable_writers()
+            except Exception as error:
+                self.log.exception("Failed to disable writers on {}: {}".format(
+                    server, str(error)))
 
     def set_data_rate_per_worker(self, value):
         if (value < 1e9) or (value > 25e9):
@@ -264,9 +283,28 @@ class ApsProductController(object):
             "project_name": proposal_id,
             "sb_id": sb_id,
             "utc_start": time.strftime("%Y/%m/%d %H:%M:%S"),
+            "ouput_dir": output_dir.replace("/DATA/", "/beegfs/DATA/TRAPUM/"),
             #"beamshape": target_config["coherent-beam-shape"]
         }
 
+        # Generate user friendly formatting for the current recording:
+        format_mapping = (
+            ("Centre frequency:", "centre_frequency", "Hz"),
+            ("Bandwidth:", "bandwidth", "Hz"),
+            ("CB Nchannels:", "coherent_nchans", ""),
+            ("CB sampling:", "coherent_tsamp", "s"),
+            ("IB Nchannels:", "incoherent_nchans", ""),
+            ("IB sampling:", "incoherent_tsamp", "s"),
+            ("Project ID:", "project_name", ""),
+            ("SB ID:", "sb_id", ""),
+            ("UTC start:", "utc_start", ""),
+            ("Directory:", "output_dir", "")
+            )
+        formatted_apsuse_meta = "<br />".join(("<font color='lightblue'><b>{}</b></font> {} {}".format(name,
+            apsuse_meta[key], unit) for name, key, unit in format_mapping))
+        formatted_apsuse_meta = "<p>{}</p>".format(formatted_apsuse_meta)
+        self._current_recording_sensor.set_value(formatted_apsuse_meta)
+        self._current_recording_directory_sensor.set_value(output_dir)
         try:
             with open("{}/apsuse.meta".format(output_dir), "w") as f:
                 f.write(json.dumps(apsuse_meta))
@@ -284,8 +322,13 @@ class ApsProductController(object):
                 if beam in beam_map:
                     sub_beam_list[beam] = beam_map[beam]
             enable_futures.append(server.enable_writers(sub_beam_list, output_dir))
-        for future in enable_futures:
-            yield future
+
+        for ii, future in enumerate(enable_futures):
+            try:
+                yield future
+            except Exception as error:
+                self.log.exception("Failed to enable writers on server {}: {}".format(
+                    self._servers[ii], str(error)))
 
     @coroutine
     def capture_start(self):
@@ -384,8 +427,24 @@ class ApsProductController(object):
             self.log.info("Configuration for server {}: {}".format(
                 server, server_config))
         self._worker_configs_sensor.set_value(all_server_configs)
+
+        failure_count = 0
         for future in configure_futures:
-            yield future
+            try:
+                yield future
+            except Exception as error:
+                log.error(
+                    "Failed to configure server with error: {}".format(
+                        str(error)))
+                failure_count += 1
+
+        if (failure_count == len(self._servers)) and not (len(self._servers) == 0):
+            self._state_sensor.set_value(self.ERROR)
+            self.log.info("Failed to prepare FBFUSE product")
+            raise Exception("No APSUSE servers configured successfully")
+        elif failure_count > 0:
+            self.log.warning("{} APSUSE servers failed to configure".format(
+                failure_count))
 
         # At this point we do the data-suspect tracking start
         self._coherent_beam_tracker = self._katportal_client.get_sensor_tracker(
@@ -470,8 +529,14 @@ class ApsProductController(object):
         for server in self._worker_config_map.keys():
             self.log.info("Sending deconfigure to server {}".format(server))
             deconfigure_futures.append(server.deconfigure())
-        for future in deconfigure_futures:
-            yield future
+
+        for ii, future in enumerate(deconfigure_futures):
+            try:
+                yield future
+            except Exception as error:
+                server = self._worker_config_map.keys()[ii]
+                self.log.exception("Failed to deconfigure worker {}: {}".format(
+                    server, str(error)))
         self._parent._server_pool.deallocate(self._worker_config_map.keys())
         self.log.info("Deallocated all servers")
         self._worker_config_map = {}

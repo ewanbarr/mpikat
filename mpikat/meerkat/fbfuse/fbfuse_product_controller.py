@@ -353,7 +353,10 @@ class FbfProductController(object):
 
         self._cbc_beam_shape = Sensor.string(
             "coherent-beam-shape",
-            description="JSON description of the tied array beam shape",
+            description=("JSON description of the tied array beam shape as an ellipse."
+                         " The 'x' and 'y' parameters specify the length of the axes in"
+                         " degrees and the 'angle' gives the orientation of the 'x' axis "
+                         "with respect to the east of the image plane in degrees"),
             default="",
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._cbc_beam_shape)

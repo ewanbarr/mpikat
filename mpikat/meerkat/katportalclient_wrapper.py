@@ -134,7 +134,7 @@ class KatportalClientWrapper(object):
     def get_fbfuse_target_config(self, product_id):
         sensor_list = [
             "phase-reference",
-            #"coherent-beam-shape"
+            "coherent-beam-shape"
         ]
         fbf_config = {}
         fbfuse_proxy = yield self.get_fbfuse_proxy_id()

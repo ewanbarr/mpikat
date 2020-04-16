@@ -25,7 +25,7 @@ from mpikat.core.ip_manager import ip_range_from_stream
 
 log = logging.getLogger('mpikat.apsuse_config_manager')
 
-DEFAULT_DATA_RATE_PER_WORKER = 6e9  # bits / s
+DEFAULT_DATA_RATE_PER_WORKER = 20e9  # bits / s
 
 DUMMY_FBF_CONFIG = {
     "coherent-beam-multicast-groups":"spead://239.11.1.15+15:7147",
@@ -114,7 +114,11 @@ def get_required_workers(fbfuse_config,
             break
     coherent_range = ip_range_from_stream(fbfuse_config['coherent-beam-multicast-groups'])
     coherent_mcast_group_rate = fbfuse_config['coherent-beam-multicast-groups-data-rate']
-    for group in coherent_range:
+  
+    import numpy as np
+    tmp = list(np.array(list(coherent_range)[:24]).reshape(3,8).T.ravel())   
+ 
+    for group in tmp:
         try:
             current_worker.add_coherent_group(group, coherent_mcast_group_rate)
         except ApsWorkerTotalBandwidthExceeded:

@@ -29,14 +29,14 @@ log = logging.getLogger("mpikat.apsuse_worker_wrapper")
 
 
 HOST_PRIORITIES = {
-    "apscn00.mpifr-be.mkat.karoo.kat.ac.za": 8,
-    "apscn01.mpifr-be.mkat.karoo.kat.ac.za": 7,
-    "apscn02.mpifr-be.mkat.karoo.kat.ac.za": 6,
-    "apscn03.mpifr-be.mkat.karoo.kat.ac.za": 5,
-    "apscn04.mpifr-be.mkat.karoo.kat.ac.za": 4,
-    "apscn05.mpifr-be.mkat.karoo.kat.ac.za": 3,
-    "apscn06.mpifr-be.mkat.karoo.kat.ac.za": 2,
-    "apscn07.mpifr-be.mkat.karoo.kat.ac.za": 1
+    "apscn00.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn01.mpifr-be.mkat.karoo.kat.ac.za": 2,
+    "apscn02.mpifr-be.mkat.karoo.kat.ac.za": 3,
+    "apscn03.mpifr-be.mkat.karoo.kat.ac.za": 4,
+    "apscn04.mpifr-be.mkat.karoo.kat.ac.za": 5,
+    "apscn05.mpifr-be.mkat.karoo.kat.ac.za": 6,
+    "apscn06.mpifr-be.mkat.karoo.kat.ac.za": 7,
+    "apscn07.mpifr-be.mkat.karoo.kat.ac.za": 8
 }
 
 

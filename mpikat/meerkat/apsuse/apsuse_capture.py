@@ -18,7 +18,7 @@ from mpikat.utils.unix_socket import UDSClient
 AVAILABLE_CAPTURE_MEMORY = 3221225472 * 10
 MAX_DADA_BLOCK_SIZE = 1 << 30
 OPTIMAL_BLOCK_LENGTH = 10.0  # seconds
-OPTIMAL_CAPTURE_BLOCKS = 16
+OPTIMAL_CAPTURE_BLOCKS = 96
 
 log = logging.getLogger("mpikat.apsuse_capture")
 os.environ["OMP_NUM_THREADS"] = "12"
@@ -178,7 +178,7 @@ class ApsCapture(object):
             "--size", int(config['filesize']),
             "--socket", self._control_socket,
             "--dir", config["base-output-dir"],
-            "--log_level", "debug"]
+            "--log_level", "info"]
         log.info("Starting APSUSE")
         log.debug(" ".join(map(str, apsuse_cmdline)))
         self._apsuse_proc = ManagedProcess(

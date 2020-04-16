@@ -597,7 +597,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                 'mcast_port': capture_range.port,
                 'interface': self._capture_interface,
                 'timestamp_step': timestamp_step,
-                'timestamp_modulus': timestamp_modulus,
+                'timestamp_modulus': timestamp_modulus/timestamp_step,
                 'ordered_feng_ids_csv': ",".join(
                     map(str, feng_capture_order_info['order'])),
                 'frequency_partition_ids_csv': ",".join(

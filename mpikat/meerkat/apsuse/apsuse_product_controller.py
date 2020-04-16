@@ -372,7 +372,7 @@ class ApsProductController(object):
 
         cb_data_rate = (self._fbf_sb_config["coherent-beam-multicast-groups-data-rate"]
             / self._fbf_sb_config["coherent-beam-count-per-group"])
-        ib_data_rate = self._fbf_sb_config["incoherent-beam-multicast-groups-data-rate"]
+        ib_data_rate = self._fbf_sb_config["incoherent-beam-multicast-group-data-rate"]
         cb_file_size = (cb_data_rate * DEFAULT_FILE_LENGTH) / 8
         ib_file_size = (ib_data_rate * DEFAULT_FILE_LENGTH) / 8
         self.log.info("CB filesize: {} bytes".format(cb_file_size))

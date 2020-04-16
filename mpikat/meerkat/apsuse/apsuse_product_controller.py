@@ -35,6 +35,8 @@ from mpikat.meerkat.apsuse.apsuse_config import get_required_workers
 
 log = logging.getLogger("mpikat.apsuse_product_controller")
 
+DEFAULT_FILE_LENGTH = 300.0 #seconds
+
 
 class ApsProductStateError(Exception):
     def __init__(self, expected_states, current_state):
@@ -284,7 +286,9 @@ class ApsProductController(object):
             "sb_id": sb_id,
             "utc_start": time.strftime("%Y/%m/%d %H:%M:%S"),
             "output_dir": output_dir.replace("/DATA/", "/beegfs/DATA/TRAPUM/"),
-            #"beamshape": target_config["coherent-beam-shape"]
+            "beamshape": target_config["coherent-beam-shape"],
+            "boresight": target_config["phase-reference"],
+            "beams": beam_map
         }
 
         # Generate user friendly formatting for the current recording:
@@ -366,6 +370,14 @@ class ApsProductController(object):
                 self._worker_config_map[server] = config
                 self._servers.append(server)
 
+        cb_data_rate = (self._fbf_sb_config["coherent-beam-multicast-groups-data-rate"]
+            / self._fbf_sb_config["coherent-beam-count-per-group"])
+        ib_data_rate = self._fbf_sb_config["incoherent-beam-multicast-groups-data-rate"]
+        cb_file_size = (cb_data_rate * DEFAULT_FILE_LENGTH) / 8
+        ib_file_size = (ib_data_rate * DEFAULT_FILE_LENGTH) / 8
+        self.log.info("CB filesize: {} bytes".format(cb_file_size))
+        self.log.info("IB filesize: {} bytes".format(ib_file_size))
+
         # Get all common configuration parameters
         common_config = {
             "bandwidth": self._fbf_sb_config["bandwidth"],
@@ -381,7 +393,7 @@ class ApsProductController(object):
             "nchans-per-heap": self._fbf_sb_config["coherent-beam-subband-nchans"],
             "sampling-interval": self._fbf_sb_config["coherent-beam-time-resolution"],
             "base-output-dir": "{}".format(self._base_output_dir),
-            "filesize": 1e9
+            "filesize": cb_file_size
         }
 
         common_incoherent_config = {
@@ -391,7 +403,7 @@ class ApsProductController(object):
             "nchans-per-heap": self._fbf_sb_config["incoherent-beam-subband-nchans"],
             "sampling-interval": self._fbf_sb_config["incoherent-beam-time-resolution"],
             "base-output-dir": "{}".format(self._base_output_dir),
-            "filesize": 1e9
+            "filesize": ib_file_size
         }
 
         configure_futures = []

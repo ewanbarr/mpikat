@@ -46,6 +46,9 @@ from mpikat.utils.db_monitor import DbMonitor
 
 log = logging.getLogger("mpikat.fbfuse_worker_server")
 
+# Set the OMP_NUM_THREADS for faster DADA buffer allocation
+os.environ["OMP_NUM_THREADS"] = "8"
+
 PACKET_PAYLOAD_SIZE = 1024  # bytes
 AVAILABLE_CAPTURE_MEMORY = 137438953472/2  # bytes
 MAX_DADA_BLOCK_SIZE = 1e9  # bytes
@@ -594,7 +597,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                 'mcast_port': capture_range.port,
                 'interface': self._capture_interface,
                 'timestamp_step': timestamp_step,
-                'timestamp_modulus': timestamp_modulus,
+                'timestamp_modulus': timestamp_modulus/timestamp_step,
                 'ordered_feng_ids_csv': ",".join(
                     map(str, feng_capture_order_info['order'])),
                 'frequency_partition_ids_csv': ",".join(
@@ -919,7 +922,7 @@ class FbfWorkerServer(AsyncDeviceServer):
 
         # Create SPEAD receiver for incoming antenna voltages
         self._mkrecv_proc = ManagedProcess(
-            ["taskset", "-c", mkrecv_cpu_set, "mkrecv_nt", "--header",
+            ["taskset", "-c", mkrecv_cpu_set, "mkrecv_rnt", "--header",
              MKRECV_CONFIG_FILENAME, "--quiet"],
             stdout_handler=MkrecvStdoutHandler(
                 callback=update_heap_loss_sensor))

@@ -90,6 +90,7 @@ class ApsMasterController(MasterController):
             except Exception as error:
                 log.warning("Failed to check disk usage level: {}".format(
                     str(error)))
+        check_disk_fill_level()
         self._disk_fill_callback = PeriodicCallback(
             check_disk_fill_level, 60 * 1000)
         self._disk_fill_callback.start()

@@ -199,7 +199,7 @@ class ApsWorkerServer(AsyncDeviceServer):
                 self._capture_interface,
                 "/tmp/apsuse_capture_coherent.sock",
                 "/tmp/coherent_mkrecv.cfg",
-                "0-8", "8-11",
+                "0-8", "12-22",
                 "coherent", "dada")
             cap_start_futures.append(coherent_cap.capture_start(config["coherent-beams"]))
             self._capture_instances.append(coherent_cap)
@@ -210,7 +210,7 @@ class ApsWorkerServer(AsyncDeviceServer):
                 self._capture_interface,
                 "/tmp/apsuse_capture_incoherent.sock",
                 "/tmp/incoherent_mkrecv.cfg",
-                "12", "13",
+                "9-11", "23",
                 "incoherent", "caca")
             cap_start_futures.append(incoherent_cap.capture_start(config["incoherent-beams"]))
             self._capture_instances.append(incoherent_cap)

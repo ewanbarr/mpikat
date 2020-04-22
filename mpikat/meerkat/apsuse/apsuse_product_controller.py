@@ -268,6 +268,8 @@ class ApsProductController(object):
         target_config = yield self._katportal_client.get_fbfuse_target_config(self._product_id)
         beam_map.update({"ifbf00000": target_config["phase-reference"]})
         self.log.debug("Beam map: {}".format(beam_map))
+        coherent_tsamp = self._fbf_sb_config["coherent-beam-tscrunch"] * self._fbf_sb_config["nchannels"] / self._fbf_sb_config["bandwidth"]
+        incoherent_tsamp = self._fbf_sb_config["incoherent-beam-tscrunch"] * self._fbf_sb_config["nchannels"] / self._fbf_sb_config["bandwidth"]
 
         # Now get all information required for APSMETA file
         output_dir = "{}/{}".format(
@@ -279,9 +281,9 @@ class ApsProductController(object):
             "centre_frequency": self._fbf_sb_config["centre-frequency"],
             "bandwidth": self._fbf_sb_config["bandwidth"],
             "coherent_nchans": self._fbf_sb_config["nchannels"] / self._fbf_sb_config["coherent-beam-fscrunch"],
-            "coherent_tsamp": self._fbf_sb_config["coherent-beam-time-resolution"],
+            "coherent_tsamp": coherent_tsamp,
             "incoherent_nchans": self._fbf_sb_config["nchannels"] / self._fbf_sb_config["incoherent-beam-fscrunch"],
-            "incoherent_tsamp": self._fbf_sb_config["incoherent-beam-time-resolution"],
+            "incoherent_tsamp": incoherent_tsamp,
             "project_name": proposal_id,
             "sb_id": sb_id,
             "utc_start": time.strftime("%Y/%m/%d %H:%M:%S"),

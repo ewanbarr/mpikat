@@ -344,13 +344,6 @@ class FbfProductController(object):
             initial_status=Sensor.NOMINAL)
         self.add_sensor(self._cbc_data_suspect)
 
-        self._cbc_data_suspect = Sensor.boolean(
-            "coherent-beam-data-suspect",
-            description="Indicates when data from the coherent beam is expected to be invalid",
-            default=True,
-            initial_status=Sensor.NOMINAL)
-        self.add_sensor(self._cbc_data_suspect)
-
         self._cbc_beam_shape = Sensor.string(
             "coherent-beam-shape",
             description=("JSON description of the tied array beam shape as an ellipse."
@@ -483,6 +476,21 @@ class FbfProductController(object):
             default="",
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._psf_png_sensor)
+
+        self._ca_target_request_sensor = Sensor.string(
+            "ca-target-request",
+            description="The last target request information received from the CA",
+            default="",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._ca_target_request_sensor)
+
+        self._ca_sb_config_request_sensor = Sensor.string(
+            "ca-sb-config-request",
+            description="The last SB config request information received from the CA",
+            default="",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._ca_sb_config_request_sensor)
+
         self._parent.mass_inform(Message.inform('interface-changed'))
 
     def teardown_sensors(self):
@@ -604,6 +612,7 @@ class FbfProductController(object):
             raise error
         try:
             self.log.debug(response.reply.arguments[1])
+            self._ca_sb_config_request_sensor.set_value(response.reply.arguments[1])
             config_dict = json.loads(response.reply.arguments[1])
         except Exception as error:
             self.log.error(
@@ -868,6 +877,7 @@ class FbfProductController(object):
                                       value):
             # TODO, should we really reset all the beams or should we have
             # a mechanism to only update changed beams
+            self._ca_target_request_sensor.set_value(value)
             config_dict = json.loads(value)
             self._cbc_data_suspect.set_value(True)
             self.reset_beams()

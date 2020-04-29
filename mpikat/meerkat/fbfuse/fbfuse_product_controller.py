@@ -877,7 +877,6 @@ class FbfProductController(object):
                                       value):
             # TODO, should we really reset all the beams or should we have
             # a mechanism to only update changed beams
-            self._ca_target_request_sensor.set_value(value)
             config_dict = json.loads(value)
             self._cbc_data_suspect.set_value(True)
             self.reset_beams()
@@ -888,13 +887,18 @@ class FbfProductController(object):
                 except BeamAllocationError as error:
                     log.warning(str(error))
             for tiling in config_dict.get('tilings', []):
-                target = Target(tiling['target'])  # required
-                freq = float(tiling.get('reference_frequency',
-                                        self._cfreq_sensor.value()))
+                # Update to default if no value
+                tiling['reference_frequency'] = tiling.get('reference_frequency', self._cfreq_sensor.value())
+                tiling['overlap'] = tiling.get('overlap', 0.5)
+                tiling['epoch'] = tiling.get('epoch', time.time())
+                # Parse values
+                target = Target(tiling['target'])
+                freq = float(tiling['reference_frequency'])
                 nbeams = int(tiling['nbeams'])
-                overlap = float(tiling.get('overlap', 0.5))
-                epoch = float(tiling.get('epoch', time.time()))
+                overlap = float(tiling['overlap'])
+                epoch = float(tiling['epoch'])
                 self.add_tiling(target, nbeams, freq, overlap, epoch)
+            self._ca_target_request_sensor.set_value(json.dumps(config_dict))
             self._parent.ioloop.add_callback(
                 wait_for_track,
                 lambda: self._cbc_data_suspect.set_value(False))

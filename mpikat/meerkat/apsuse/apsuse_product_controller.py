@@ -31,7 +31,7 @@ from katcp import Sensor, Message
 from mpikat.core.worker_pool import WorkerAllocationError
 from mpikat.core.utils import LoggingSensor
 from mpikat.meerkat.katportalclient_wrapper import Interrupt
-from mpikat.meerkat.apsuse.apsuse_config import get_required_workers
+from mpikat.meerkat.apsuse.apsuse_config import ApsConfigGenerator
 
 log = logging.getLogger("mpikat.apsuse_product_controller")
 
@@ -353,24 +353,33 @@ class ApsProductController(object):
         self._fbf_sb_config = yield self._katportal_client.get_fbfuse_sb_config(self._product_id)
         self._fbf_sb_config_sensor.set_value(self._fbf_sb_config)
         self.log.debug("Determined FBFUSE config: {}".format(self._fbf_sb_config))
-        worker_configs = get_required_workers(
-            self._fbf_sb_config, self._data_rate_per_worker_sensor.value())
 
-        # allocate workers
-        self._worker_config_map = {}
+        # New multicast setup
+        # First we allocate all servers
         self._servers = []
-        for config in worker_configs:
+        self._worker_config_map = {}
+        while True:
             try:
                 server = self._parent._server_pool.allocate(1)[0]
             except WorkerAllocationError:
-                message = (
-                    "Could not allocate resources for capture of the following groups\n",
-                    "incoherent groups: {}\n".format(",".join(map(str, config.incoherent_groups()))),
-                    "coherent groups: {}\n".format(",".join(map(str, config.coherent_groups()))))
-                self.log.warning(message)
+                break
             else:
-                self._worker_config_map[server] = config
                 self._servers.append(server)
+
+        config_generator = ApsConfigGenerator(self._fbf_sb_config,
+            self._data_rate_per_worker_sensor.value())
+        for server in self._servers:
+            config = config_generator.allocate_groups(server)
+            if config:
+                self._worker_config_map[server] = config
+
+        message = "\n".join(
+            "Could not allocate resources for capture of the following groups",
+            "incoherent groups: {}".format(",".join(
+                map(str, config_generator.remaining_incoherent_groups()))),
+            "coherent groups: {}".format(",".join(
+                map(str, config_generator.remaining_coherent_groups()))))
+        self.log.warning(message)
 
         cb_data_rate = (self._fbf_sb_config["coherent-beam-multicast-groups-data-rate"]
             / self._fbf_sb_config["coherent-beam-count-per-group"])

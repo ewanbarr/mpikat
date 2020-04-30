@@ -566,7 +566,7 @@ class FbfWorkerServer(AsyncDeviceServer):
             # Coherent beam timestamps
             coh_heap_size = 8192
             nsamps_per_coh_heap = (coh_heap_size / (partition_nchans
-                                   * coherent_beam_config['fscrunch']))
+                                   / coherent_beam_config['fscrunch']))
             coh_timestamp_step = (coherent_beam_config['tscrunch']
                                   * nsamps_per_coh_heap
                                   * 2 * feng_config["nchans"])
@@ -574,7 +574,7 @@ class FbfWorkerServer(AsyncDeviceServer):
             # Incoherent beam timestamps
             incoh_heap_size = 8192
             nsamps_per_incoh_heap = (incoh_heap_size / (partition_nchans
-                                     * incoherent_beam_config['fscrunch']))
+                                     / incoherent_beam_config['fscrunch']))
             incoh_timestamp_step = (incoherent_beam_config['tscrunch']
                                     * nsamps_per_incoh_heap * 2
                                     * feng_config["nchans"])
@@ -650,7 +650,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                 'timestamp_step': coh_timestamp_step,
                 'beam_ids': "0:{}".format(nbeams),
                 'multibeam': True,
-                'subband_idx': chan0_idx,
+                'subband_idx': chan0_idx / coherent_beam_config['fscrunch'],
                 'heap_group': nbeams_per_group
             }
             mksend_coh_header = make_mksend_header(
@@ -682,7 +682,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                 'timestamp_step': incoh_timestamp_step,
                 'beam_ids': 0,
                 'multibeam': False,
-                'subband_idx': chan0_idx,
+                'subband_idx': chan0_idx / incoherent_beam_config['fscrunch'],
                 'heap_group': 1
             }
             mksend_incoh_header = make_mksend_header(

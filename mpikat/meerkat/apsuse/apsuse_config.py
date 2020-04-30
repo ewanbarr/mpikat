@@ -37,14 +37,14 @@ DUMMY_FBF_CONFIG = {
 
 
 HOST_TO_LEAF_MAP = {
-    "apscn00.mpifr-be.mkat.karoo.kat.ac.za": 0,
-    "apscn01.mpifr-be.mkat.karoo.kat.ac.za": 0,
-    "apscn02.mpifr-be.mkat.karoo.kat.ac.za": 0,
-    "apscn03.mpifr-be.mkat.karoo.kat.ac.za": 0,
-    "apscn04.mpifr-be.mkat.karoo.kat.ac.za": 1,
-    "apscn05.mpifr-be.mkat.karoo.kat.ac.za": 1,
-    "apscn06.mpifr-be.mkat.karoo.kat.ac.za": 1,
-    "apscn07.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn00.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn01.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn02.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn03.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn04.mpifr-be.mkat.karoo.kat.ac.za": 0,
+    "apscn05.mpifr-be.mkat.karoo.kat.ac.za": 0,
+    "apscn06.mpifr-be.mkat.karoo.kat.ac.za": 0,
+    "apscn07.mpifr-be.mkat.karoo.kat.ac.za": 0,
 }
 
 

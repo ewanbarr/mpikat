@@ -368,11 +368,7 @@ class ApsProductController(object):
 
         config_generator = ApsConfigGenerator(self._fbf_sb_config,
             self._data_rate_per_worker_sensor.value())
-        for server in self._servers:
-            config = config_generator.allocate_groups(server)
-            if config:
-                self._worker_config_map[server] = config
-
+        self._worker_config_map = config_generator.allocate_groups(self._servers)
         message = "\n".join(
             "Could not allocate resources for capture of the following groups",
             "incoherent groups: {}".format(",".join(

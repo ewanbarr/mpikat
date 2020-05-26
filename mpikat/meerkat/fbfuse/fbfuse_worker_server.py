@@ -24,6 +24,7 @@ import json
 import signal
 import os
 import coloredlogs
+import datetime
 from subprocess import Popen, PIPE, check_call
 from optparse import OptionParser
 from tornado.gen import coroutine
@@ -43,6 +44,7 @@ from mpikat.meerkat.fbfuse.fbfuse_autoscaling_trigger import AutoscalingTrigger
 from mpikat.meerkat.fbfuse.fbfuse_gain_buffer_controller import GainBufferController
 from mpikat.utils.process_tools import process_watcher, ManagedProcess
 from mpikat.utils.db_monitor import DbMonitor
+from mpikat.meerkat.fbfuse.fbfuse_transient_buffer import TransientBuffer
 
 log = logging.getLogger("mpikat.fbfuse_worker_server")
 
@@ -142,6 +144,8 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._output_level = 10.0
         self._partition_bandwidth = None
         self._centre_frequency = None
+        self._transient_buffer = None
+        self._tb_params = {}
 
         super(FbfWorkerServer, self).__init__(ip, port)
 
@@ -313,7 +317,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         check_call(cmd)
 
     @coroutine
-    def _make_db(self, key, block_size, nblocks, timeout=120):
+    def _make_db(self, key, block_size, nblocks, nreaders=1, timeout=120):
         try:
             yield self._destroy_db(key, timeout=20)
         except Exception as error:
@@ -323,7 +327,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                    "nblocks={}").format(key, block_size, nblocks))
         if self._exec_mode == FULL:
             cmdline = map(str, ["dada_db", "-k", key, "-b", block_size, "-n",
-                          nblocks, "-l", "-p"])
+                          nblocks, "-l", "-p", "-r", nreaders])
             proc = Popen(cmdline, stdout=PIPE,
                          stderr=PIPE, shell=False,
                          close_fds=True)
@@ -422,7 +426,17 @@ class FbfWorkerServer(AsyncDeviceServer):
         """
         log.info("Received request for transient buffer capture")
         log.info("Event parameters: {}, {}, {}, {}, {}".format(utc_start, width, dm, ref_freq, trigger_id))
-        # self._transient_buffer.trigger(...)
+        if not self._transient_buffer:
+            log.error("Buffer dump requested but no active transient buffer")
+            return ("ok", "failed to dump buffer: no transient buffer active")
+        else:
+            ts = datetime.datetime.strptime(utc_start, '%Y-%m-%dT%H:%M:%S.%f')
+            unix_time = datetime.datetime.timestamp(ts)
+            try:
+                self._transient_buffer.trigger(unix_time, unix_time+width, dm, ref_freq, trigger_id)
+            except Exception as error:
+                log.exception("Failed to trigger transient buffer with error: {}".format(str(error)))
+                return ("fail", str(error))
         return ("ok",)
 
     @request(Str(), Int(), Int(), Float(), Float(), Str(), Str(),
@@ -714,6 +728,12 @@ class FbfWorkerServer(AsyncDeviceServer):
             psrdada_compilation_future = compile_psrdada_cpp(
                 fbfuse_pipeline_params)
 
+            self._tb_params['total_nantennas'] = len(feng_capture_order_info['order'])
+            self._tb_params['total_nchans'] = feng_config['nchans']
+            self._tb_params['partition_nchans'] = partition_nchans
+            self._tb_params['partition_bw'] = self._partition_bandwidth
+            self._tb_params['partition_cfreq'] = self._centre_frequency
+
             log.info("Creating all DADA buffers")
             # Create capture data DADA buffer
             capture_block_size = ngroups_data * heap_group_size
@@ -723,7 +743,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                 "%s" % self._dada_input_key))
             input_make_db_future = self._make_db(
                 self._dada_input_key, capture_block_size,
-                capture_block_count)
+                capture_block_count, nreaders=2)
 
             # Create coherent beam output DADA buffer
             coh_output_channels = (ngroups * nchans_per_group) / \
@@ -880,11 +900,13 @@ class FbfWorkerServer(AsyncDeviceServer):
         if self._numa == 0:
             mksend_cpu_set = "7"
             psrdada_cpp_cpu_set = "6"
-            mkrecv_cpu_set = "0-5"
+            mkrecv_cpu_set = "0-4"
+            tb_core = "5"
         else:
             mksend_cpu_set = "14"
             psrdada_cpp_cpu_set = "15"
-            mkrecv_cpu_set = "8-13"
+            mkrecv_cpu_set = "8-12"
+            tb_core = "13"
 
         self._mksend_coh_proc = ManagedProcess(
             ["taskset", "-c", mksend_cpu_set, "mksend", "--header",
@@ -916,6 +938,18 @@ class FbfWorkerServer(AsyncDeviceServer):
             " ".join(map(str, psrdada_cpp_cmdline)))
         log.debug(" ".join(map(str, psrdada_cpp_cmdline)))
         self._psrdada_cpp_proc = ManagedProcess(psrdada_cpp_cmdline)
+
+        self._transient_buffer = TransientBuffer(
+            self._dada_input_key,
+            self._tb_params['total_nantennas'],
+            self._tb_params['partition_nchans'],
+            self._tb_params['partition_cfreq'],
+            self._tb_params['partition_bw'],
+            self._tb_params['total_nchans'],
+            socket_name="/tmp/tb_trigger.sock",
+            fill_level=0.8
+            )
+        self._transient_buffer.start(core=tb_core)
 
         def update_heap_loss_sensor(curr, total, avg, window):
             self._mkrecv_heap_loss.set_value(100.0 - avg)
@@ -1011,6 +1045,9 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._mkrecv_proc.terminate()
         log.info("Stopping PSRDADA_CPP instance")
         self._psrdada_cpp_proc.terminate()
+        log.info("Stopping transient buffer instance")
+        self._transient_buffer.stop()
+        self._transient_buffer = None
         log.info("Stopping MKSEND instances")
         self._mksend_incoh_proc.terminate()
         self._mksend_coh_proc.terminate()

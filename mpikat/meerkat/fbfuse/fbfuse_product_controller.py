@@ -804,7 +804,7 @@ class FbfProductController(object):
         # Below are some convenience calculations
         coh_heap_size = 8192
         nsamps_per_coh_heap = (coh_heap_size / (cm.nchans_per_worker
-                               * config['coherent-beams-fscrunch']))
+                               / config['coherent-beams-fscrunch']))
         coh_timestamp_step = (config['coherent-beams-tscrunch']
                               * nsamps_per_coh_heap
                               * 2 * self._n_channels)
@@ -819,7 +819,7 @@ class FbfProductController(object):
 
         incoh_heap_size = 8192
         nsamps_per_incoh_heap = (incoh_heap_size / (cm.nchans_per_worker
-                                 * config['incoherent-beam-fscrunch']))
+                                 / config['incoherent-beam-fscrunch']))
         incoh_timestamp_step = (config['incoherent-beam-tscrunch']
                                 * nsamps_per_incoh_heap
                                 * 2 * self._n_channels)

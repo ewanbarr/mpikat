@@ -922,7 +922,7 @@ class FbfWorkerServer(AsyncDeviceServer):
 
         # Create SPEAD receiver for incoming antenna voltages
         self._mkrecv_proc = ManagedProcess(
-            ["taskset", "-c", mkrecv_cpu_set, "mkrecv_rnt", "--header",
+            ["taskset", "-c", mkrecv_cpu_set, "mkrecv_v4", "--header",
              MKRECV_CONFIG_FILENAME, "--quiet"],
             stdout_handler=MkrecvStdoutHandler(
                 callback=update_heap_loss_sensor))

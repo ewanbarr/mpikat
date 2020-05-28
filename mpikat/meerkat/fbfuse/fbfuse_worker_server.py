@@ -947,6 +947,7 @@ class FbfWorkerServer(AsyncDeviceServer):
             self._tb_params['partition_bw'],
             self._tb_params['total_nchans'],
             socket_name="/tmp/tb_trigger.sock",
+            output_dir="/transient_buffer_output/",
             fill_level=0.8
             )
         self._transient_buffer.start(core=tb_core)

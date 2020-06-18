@@ -369,12 +369,12 @@ class ApsProductController(object):
         config_generator = ApsConfigGenerator(self._fbf_sb_config,
             self._data_rate_per_worker_sensor.value())
         self._worker_config_map = config_generator.allocate_groups(self._servers)
-        message = "\n".join(
+        message = "\n".join((
             "Could not allocate resources for capture of the following groups",
             "incoherent groups: {}".format(",".join(
                 map(str, config_generator.remaining_incoherent_groups()))),
             "coherent groups: {}".format(",".join(
-                map(str, config_generator.remaining_coherent_groups()))))
+                map(str, config_generator.remaining_coherent_groups())))))
         self.log.warning(message)
 
         cb_data_rate = (self._fbf_sb_config["coherent-beam-multicast-groups-data-rate"]

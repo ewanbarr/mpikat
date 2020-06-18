@@ -167,9 +167,9 @@ class ApsConfigGenerator(object):
                     else:
                         continue
             print(self._incoherent_groups, self._coherent_groups)
-            final_configs.update(configs)
+        for server, config in configs.items():
+            final_configs[server] = self._finalise_worker(config, server)
         return final_configs
-
 
     def _finalise_worker(self, worker, server):
         valid = False
@@ -198,4 +198,4 @@ class ApsConfigGenerator(object):
         return self._incoherent_groups
 
     def remaining_coherent_groups(self):
-        return self._even_groups + self._odd_groups
+        return self._coherent_groups

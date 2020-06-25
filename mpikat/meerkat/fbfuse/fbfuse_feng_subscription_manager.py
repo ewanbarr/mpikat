@@ -49,7 +49,7 @@ HOST_TO_LEAF_MAP = {
     "fbfpn17.mpifr-be.mkat.karoo.kat.ac.za": 2,
     "fbfpn18.mpifr-be.mkat.karoo.kat.ac.za": 2,
     "fbfpn19.mpifr-be.mkat.karoo.kat.ac.za": 2,
-    "fbfpn20.mpifr-be.mkat.karoo.kat.ac.za": 2,
+    "fbfpn32.mpifr-be.mkat.karoo.kat.ac.za": 2,
     "fbfpn21.mpifr-be.mkat.karoo.kat.ac.za": 2,
     "fbfpn22.mpifr-be.mkat.karoo.kat.ac.za": 2,
     "fbfpn23.mpifr-be.mkat.karoo.kat.ac.za": 2,

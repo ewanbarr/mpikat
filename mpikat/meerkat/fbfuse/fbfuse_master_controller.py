@@ -453,8 +453,11 @@ class FbfMasterController(MasterController):
             target = Target(target)
         except Exception as error:
             raise Return(("fail", str(error)))
-        yield product.target_start(target)
-        yield product.rescale()
+        try:
+            yield product.target_start(target)
+            yield product.rescale()
+        except Exception as error:
+            log.error(str(error))
         raise Return(("ok",))
 
     @request(Str())
@@ -803,7 +806,9 @@ class FbfMasterController(MasterController):
         """
         @brief      Add default FBFUSE nodes to the server pool
         """
-        for idx in range(32):
+        for idx in range(33):
+            if idx == 20:
+                continue
             self._server_pool.add("fbfpn{:02d}.mpifr-be.mkat.karoo.kat.ac.za".format(idx), 6000)
             self._server_pool.add("fbfpn{:02d}.mpifr-be.mkat.karoo.kat.ac.za".format(idx), 6001)
         return ("ok",)

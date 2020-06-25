@@ -21,7 +21,6 @@ SOFTWARE.
 """
 import logging
 import json
-import numpy as np
 from mpikat.core.ip_manager import ip_range_from_stream
 
 log = logging.getLogger('mpikat.apsuse_config_manager')
@@ -37,14 +36,14 @@ DUMMY_FBF_CONFIG = {
 
 
 HOST_TO_LEAF_MAP = {
-    "apscn00.mpifr-be.mkat.karoo.kat.ac.za": 0,
-    "apscn01.mpifr-be.mkat.karoo.kat.ac.za": 0,
-    "apscn02.mpifr-be.mkat.karoo.kat.ac.za": 0,
-    "apscn03.mpifr-be.mkat.karoo.kat.ac.za": 0,
-    "apscn04.mpifr-be.mkat.karoo.kat.ac.za": 1,
-    "apscn05.mpifr-be.mkat.karoo.kat.ac.za": 1,
-    "apscn06.mpifr-be.mkat.karoo.kat.ac.za": 1,
-    "apscn07.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn00.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn01.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn02.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn03.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn04.mpifr-be.mkat.karoo.kat.ac.za": 0,
+    "apscn05.mpifr-be.mkat.karoo.kat.ac.za": 0,
+    "apscn06.mpifr-be.mkat.karoo.kat.ac.za": 0,
+    "apscn07.mpifr-be.mkat.karoo.kat.ac.za": 0,
 }
 
 
@@ -116,8 +115,7 @@ class ApsWorkerConfig(object):
 
 
 class ApsConfigGenerator(object):
-    def __init__(self, fbfuse_config,
-        bandwidth_per_worker=DEFAULT_DATA_RATE_PER_WORKER):
+    def __init__(self, fbfuse_config, bandwidth_per_worker=DEFAULT_DATA_RATE_PER_WORKER):
         self._fbfuse_config = fbfuse_config
         self._bandwidth_per_worker = bandwidth_per_worker
 
@@ -133,38 +131,45 @@ class ApsConfigGenerator(object):
             self._fbfuse_config['coherent-beam-multicast-groups-data-rate'])
         self._coherent_groups = list(self._coherent_range)
 
-        self._even_groups = list(np.array(self._coherent_groups)[::2])
-        self._odd_groups = list(np.array(self._coherent_groups)[1::2])
+    def allocate_groups(self, servers):
+        configs = {}
+        final_configs = {}
+        for server in servers:
+            configs[server] = ApsWorkerConfig(self._bandwidth_per_worker)
 
-    def allocate_groups(self, server):
-        leaf = HOST_TO_LEAF_MAP[server.hostname]
-        if leaf == 0:
-            cgroups = self._even_groups
-        else:
-            cgroups = self._odd_groups
-        current_worker = ApsWorkerConfig(self._bandwidth_per_worker)
-        if self._incoherent_groups:
-            group = self._incoherent_groups.pop(0)
-            try:
-                current_worker.add_incoherent_group(group, self._incoherent_mcast_group_rate)
-            except (ApsWorkerTotalBandwidthExceeded, ApsWorkerBandwidthExceeded):
-                log.error("Incoherent beam mutlicast group ({} Gb/s) size exceeds data rate for one node ({} Gb/s)".format(
-                    self._incoherent_mcast_group_rate/1e9, current_worker._total_bandwidth/1e9))
-                log.error("Incoherent beam data will not be captured")
+        while configs and (self._incoherent_groups or self._coherent_groups):
+            for server in configs.keys():
+                if self._incoherent_groups:
+                    group = self._incoherent_groups.pop(0)
+                    try:
+                        configs[server].add_incoherent_group(
+                            group, self._incoherent_mcast_group_rate)
+                    except (ApsWorkerTotalBandwidthExceeded, ApsWorkerBandwidthExceeded):
+                        log.error("Incoherent beam mutlicast group ({} Gb/s) size exceeds data rate for one node ({} Gb/s)".format(
+                            self._incoherent_mcast_group_rate/1e9,
+                            configs[server]._total_bandwidth/1e9))
+                        log.error("Incoherent beam data will not be captured")
+                    else:
+                        continue
 
-        while cgroups:
-            group = cgroups[0]
-            try:
-                current_worker.add_coherent_group(group, self._coherent_mcast_group_rate)
-            except ApsWorkerTotalBandwidthExceeded:
-                log.error("Coherent beam mutlicast group ({} Gb/s) size exceeds data rate for one node ({} Gb/s)".format(
-                    self._coherent_mcast_group_rate/1e9, current_worker._total_bandwidth/1e9))
-                log.error("Coherent beam data will not be captured")
-                break
-            except ApsWorkerBandwidthExceeded:
-                return self._finalise_worker(current_worker, server)
-            else:
-                cgroups.pop(0)
+                if self._coherent_groups:
+                    group = self._coherent_groups.pop(0)
+                    try:
+                        configs[server].add_coherent_group(group, self._coherent_mcast_group_rate)
+                    except ApsWorkerTotalBandwidthExceeded:
+                        log.error("Coherent beam mutlicast group ({} Gb/s) size exceeds data rate for one node ({} Gb/s)".format(
+                            self._coherent_mcast_group_rate/1e9, configs[server]._total_bandwidth/1e9))
+                        log.error("Coherent beam data will not be captured")
+                    except ApsWorkerBandwidthExceeded:
+                        self._coherent_groups.insert(0, group)
+                        final_configs[server] = self._finalise_worker(configs[server], server)
+                        del configs[server]
+                    else:
+                        continue
+            print(self._incoherent_groups, self._coherent_groups)
+        for server, config in configs.items():
+            final_configs[server] = self._finalise_worker(config, server)
+        return final_configs
 
     def _finalise_worker(self, worker, server):
         valid = False
@@ -175,7 +180,7 @@ class ApsConfigGenerator(object):
             valid = True
             spead_formatted = "spead://{}:{}".format(str(coherent_group), self._coherent_range.port)
             mapping = json.loads(self._fbfuse_config['coherent-beam-multicast-group-mapping'])
-            beam_idxs = mapping[spead_formatted]
+            beam_idxs = mapping.get(spead_formatted, range(12))
             worker._coherent_beams.extend(beam_idxs)
         log.debug(("Worker {} config: coherent-groups: {},"
                    " coherent-beams: {}, incoherent-groups: {},"
@@ -193,4 +198,4 @@ class ApsConfigGenerator(object):
         return self._incoherent_groups
 
     def remaining_coherent_groups(self):
-        return self._even_groups + self._odd_groups
+        return self._coherent_groups

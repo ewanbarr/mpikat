@@ -455,7 +455,6 @@ class FbfMasterController(MasterController):
             raise Return(("fail", str(error)))
         try:
             yield product.target_start(target)
-            yield product.rescale()
         except Exception as error:
             log.error(str(error))
         raise Return(("ok",))

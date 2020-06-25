@@ -23,6 +23,7 @@ import logging
 import json
 import signal
 import os
+import time
 import coloredlogs
 import datetime
 from subprocess import Popen, PIPE, check_call
@@ -431,7 +432,7 @@ class FbfWorkerServer(AsyncDeviceServer):
             return ("ok", "failed to dump buffer: no transient buffer active")
         else:
             ts = datetime.datetime.strptime(utc_start, '%Y-%m-%dT%H:%M:%S.%f')
-            unix_time = datetime.datetime.timestamp(ts)
+            unix_time = time.mktime(ts.timetuple()) + float(utc_start.split(".")[-1]) * 1e-6
             try:
                 self._transient_buffer.trigger(unix_time, unix_time+width, dm, ref_freq, trigger_id)
             except Exception as error:

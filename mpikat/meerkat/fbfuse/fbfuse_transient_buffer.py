@@ -55,7 +55,7 @@ class TransientBuffer(object):
         self._proc = None
         self._proc_mon = None
         self._running = False
-        self._fill_level = fill_level
+        self._fill_level = 0.5#fill_level
 
     def start(self, core=0):
         args = [
@@ -69,8 +69,7 @@ class TransientBuffer(object):
             "--nchannels", self._total_nchans,
             "--centre_freq", self._cfreq,
             "--bandwidth", self._bw,
-            "--outdir", self._output_dir,
-            "--log_level", "info"]
+            "--outdir", self._output_dir]
         # Create SPEAD receiver for incoming antenna voltages
         self._proc = ManagedProcess(args)
         self._running = True

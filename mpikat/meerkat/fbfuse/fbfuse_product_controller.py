@@ -871,6 +871,10 @@ class FbfProductController(object):
                     "Unknown error while waiting on telescope to enter 'track' state: {}".format(
                         str(error)))
             else:
+                try:
+                    yield self.rescale()
+                except Exception as error:
+                    log.error("Unable to rescale with error: {}".format(str(error)))
                 callback()
 
         def ca_target_update_callback(received_timestamp, timestamp, status,

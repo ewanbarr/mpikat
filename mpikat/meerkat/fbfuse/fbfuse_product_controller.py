@@ -39,7 +39,6 @@ from mpikat.meerkat.fbfuse import (
     BeamAllocationError,
     DelayConfigurationServer,
     FbfConfigurationManager)
-from mpikat.meerkat.fbfuse.fbfuse_gains_helper import get_gains
 from mpikat.meerkat.katportalclient_wrapper import SubarrayActivity
 
 N_FENG_STREAMS_PER_WORKER = 4

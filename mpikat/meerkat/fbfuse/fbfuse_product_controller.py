@@ -25,6 +25,7 @@ import json
 import time
 import struct
 import base64
+import cPickle
 from copy import deepcopy
 from tornado.gen import coroutine, Return
 from tornado.locks import Event
@@ -38,6 +39,8 @@ from mpikat.meerkat.fbfuse import (
     BeamAllocationError,
     DelayConfigurationServer,
     FbfConfigurationManager)
+from mpikat.meerkat.fbfuse.fbfuse_gains_helper import get_gains
+from mpikat.meerkat.katportalclient_wrapper import SubarrayActivity
 
 N_FENG_STREAMS_PER_WORKER = 4
 COH_ANTENNA_GRANULARITY = 4
@@ -63,7 +66,7 @@ class FbfProductController(object):
 
     def __init__(self, parent, product_id, katpoint_antennas,
                  n_channels, feng_streams, proxy_name, feng_config,
-                 subarray_activity_tracker):
+                 kpc_url, kpc_wrapper_type):
         """
         @brief      Construct new instance
 
@@ -79,8 +82,6 @@ class FbfProductController(object):
                                       (in the form: spead://239.11.1.150+15:7147)
 
         @param      proxy_name        The name of the proxy associated with this subarray (used as a sensor prefix)
-
-        #NEED FENG CONFIG
 
         @param      servers           A list of FbfWorkerServer instances allocated to this product controller
         """
@@ -102,8 +103,10 @@ class FbfProductController(object):
         self._beam_manager = None
         self._delay_config_server = None
         self._ca_client = None
+        self._kpc_url = kpc_url
         self._activity_tracker_interrupt = Event()
-        self._activity_tracker = subarray_activity_tracker
+        self._activity_tracker = SubarrayActivity(self._kpc_url)
+        self._katportal_wrapper_type = kpc_wrapper_type
         self._previous_sb_config = None
         self._managed_sensors = []
         self._beam_sensors = []
@@ -1027,6 +1030,51 @@ class FbfProductController(object):
             except Exception as error:
                 log.exception(
                     "Error running TB dump on server {}: {}".format(
+                        self._servers[ii], str(error)))
+
+    @coroutine
+    def set_telstate_complex_gains(self):
+        if not self.capturing:
+            raise FbfProductStateError([self.CAPTURING], self.state)
+        # first get complex gains
+        self.log.info("Fetching latest complex gains from telstate")
+        kpc = self._katportal_wrapper_type(self._kpc_url)
+        gains = kpc.get_gains()
+        self.log.info("Received gains for the following inputs: {}".format(
+            sorted(gains.keys())))
+        futures = []
+        for server in self._servers:
+            idx = self._server_configs[server][2]
+            step = self._server_configs[server][1]
+            server_gains = {}
+            for key, g_array in gains.items():
+                server_gains[key] = g_array[idx * step: (idx+1) * step]
+            self.log.debug("Selecting gains for channels {}:{} for {}".format(
+                idx * step, (idx+1) * step, server))
+            futures.append(server.set_complex_gains(
+                cPickle.dumps(server_gains)))
+        for ii, future in enumerate(futures):
+            try:
+                yield future
+            except Exception as error:
+                log.exception(
+                    "Error when setting telstate gains on server {}: {}".format(
+                        self._servers[ii], str(error)))
+
+    @coroutine
+    def set_default_complex_gains(self):
+        if not self.capturing:
+            raise FbfProductStateError([self.CAPTURING], self.state)
+        self.log.info("Setting complex gains back to default value (1+0i)")
+        futures = []
+        for server in self._servers:
+            futures.append(server.reset_complex_gains())
+        for ii, future in enumerate(futures):
+            try:
+                yield future
+            except Exception as error:
+                log.exception(
+                    "Error when setting default gains on server {}: {}".format(
                         self._servers[ii], str(error)))
 
     @coroutine

@@ -28,8 +28,9 @@ log = logging.getLogger("mpikat.fbfuse_gain_buffer_controller")
 
 
 class GainBufferController(object):
-    def __init__(self, nantennas, nchans, npol):
+    def __init__(self, nantennas, nchans, npol, antenna_capture_order):
         self._nantennas = nantennas
+        self._capture_order = antenna_capture_order
         self._nchans = nchans
         self._npol = npol
         self._nelements = self._nantennas * self._nchans * self._npol
@@ -38,6 +39,8 @@ class GainBufferController(object):
         self.mutex_semaphore_key = "gain_buffer_mutex"
         self.counting_semaphore_key = "gain_buffer_count"
         self._nreaders = 1
+        gains = np.exp(np.zeros(self._nelements)*1j).astype("complex64")
+        self._gains = gains.reshape(self._nantennas, self._nchans, self._npol)
 
     def __del__(self):
         self.unlink()
@@ -113,6 +116,19 @@ class GainBufferController(object):
             self._shared_buffer.fd, self._shared_buffer.size)
         log.info("Delay buffer controller started")
 
+    def set_gains(self, gains):
+        for antenna_idx, antenna_name in enumerate(self._capture_order):
+            for pol_idx, pol_name in [(0, "h"), (1, "v")]:
+                ant_string = "{}{}".format(antenna_name, pol_name)
+                log.debug("Updating gains for {}".format(ant_string))
+                self._gains[antenna_idx, :, pol_idx] = gains[ant_string].astype("complex64")
+        self.update_gains()
+
+    def set_default_gains(self):
+        gains = np.exp(np.zeros(self._nelements)*1j).astype("complex64")
+        self._gains = gains.reshape(self._nantennas, self._nchans, self._npol)
+        self.update_gains()
+
     def update_gains(self):
         for ii in range(self._nreaders):
             self._mutex_semaphore.acquire()
@@ -129,7 +145,7 @@ class GainBufferController(object):
 
     def write_gains(self):
         log.debug("Writing gains")
-        gains = np.exp(np.zeros(self._nelements)*1j)
-        gains = gains.astype("complex64").view("float32")
         self._shared_buffer_mmap.seek(0)
-        self._shared_buffer_mmap.write(gains.tobytes())
+        self._shared_buffer_mmap.write(self._gains.ravel().tobytes())
+
+

@@ -24,13 +24,17 @@ import logging
 import uuid
 import time
 import datetime
+import katsdptelstate
 from tornado.gen import coroutine, Return, sleep, TimeoutError
 from katportalclient import KATPortalClient
 from katcp.resource import KATCPSensorReading
 from katcp import Sensor
+from mpikat.meerkat.fbfuse.fbfuse_gains_helper import get_phaseup_corrections
 
 log = logging.getLogger('mpikat.katportalclient_wrapper')
 
+class SDPWideProductNotFound(Exception):
+    pass
 
 class KatportalClientWrapper(object):
     def __init__(self, host, callback=None):
@@ -41,7 +45,7 @@ class KatportalClientWrapper(object):
             logger=logging.getLogger('katcp'))
 
     @coroutine
-    def _query(self, component, sensor):
+    def _query(self, component, sensor, include_value_ts=False):
         log.debug("Querying sensor '{}' on component '{}'".format(
             sensor, component))
         sensor_name = yield self._client.sensor_subarray_lookup(
@@ -49,7 +53,7 @@ class KatportalClientWrapper(object):
         log.debug("Found sensor name: {}".format(sensor_name))
         sensor_sample = yield self._client.sensor_value(
             sensor_name,
-            include_value_ts=False)
+            include_value_ts=include_value_ts)
         log.debug("Sensor value: {}".format(sensor_sample))
         if sensor_sample.status != Sensor.STATUSES[Sensor.NOMINAL]:
             message = "Sensor {} not in NOMINAL state".format(sensor_name)
@@ -124,6 +128,70 @@ class KatportalClientWrapper(object):
     def get_sb_id(self):
         sensor_sample = yield self._query('sub', 'script-experiment-id')
         raise Return(sensor_sample.value)
+
+    @coroutine
+    def get_telstate(self, key='_wide_'):
+        sensor_sample = yield self._query('sdp', 'subarray-product-ids')
+        products = sensor_sample.value.split(",")
+        for product in products:
+            print product
+            if key in product:
+                product_id = product
+                break
+        else:
+            raise SDPWideProductNotFound
+        sensor_sample = yield self._query(
+            'sdp', 'spmc_{}_telstate_telstate'.format(product_id))
+        raise Return(sensor_sample.value)
+
+    @coroutine
+    def get_last_phaseup_timestamp(self):
+        sensor_sample = yield self._query(
+            'sub', 'script-last-phaseup',
+            include_value_ts=True)
+        raise Return(sensor_sample.value_time)
+
+    @coroutine
+    def get_last_delay_cal_timestamp(self):
+        sensor_sample = yield self._query(
+            'sub', 'script-last-delay-calibration',
+            include_value_ts=True)
+        raise Return(sensor_sample.value_time)
+
+    @coroutine
+    def get_last_calibration_timestamp(self):
+        delay_cal_error = None
+        phase_cal_error = None
+        try:
+            delay_cal = yield self.get_last_delay_cal_timestamp()
+        except Exception as error:
+            delay_cal_error = error
+        try:
+            phase_cal = yield self.get_last_phaseup_timestamp()
+        except Exception as error:
+            phase_cal_error = error
+
+        if phase_cal_error and delay_cal_error:
+            raise Exception(
+                "No valid calibration timestamps: delay error: {}, phaseup error: {}".format(
+                    delay_cal_error, phase_cal_error))
+        elif phase_cal_error:
+            raise Return(delay_cal)
+        elif delay_cal_error:
+            raise Return(phase_cal)
+        else:
+            raise Return(max(delay_cal, phase_cal))
+
+    @coroutine
+    def get_gains(self):
+        val = yield self.get_telstate()
+        telstate_address = "{}:{}".format(*eval(val))
+        last_calibration = yield self.get_last_calibration_timestamp()
+        telstate = katsdptelstate.TelescopeState(telstate_address)
+        corrections = get_phaseup_corrections(
+            telstate,
+            last_calibration, 1.0, False)
+        raise Return(corrections)
 
     @coroutine
     def get_fbfuse_address(self):
@@ -320,13 +388,10 @@ if __name__ == "__main__":
     log = logging.getLogger('mpikat.katportalclient_wrapper')
     log.setLevel(logging.DEBUG)
     ioloop = tornado.ioloop.IOLoop.current()
-
-
     client = KatportalClientWrapper(host)
 
     @coroutine
     def setup():
-        val = yield client.get_fbfuse_proxy_id()
-        print val
+        yield client.get_telstate()
 
     ioloop.run_sync(setup)

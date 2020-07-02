@@ -26,6 +26,8 @@ import os
 import time
 import coloredlogs
 import datetime
+import cPickle
+import numpy as np
 from subprocess import Popen, PIPE, check_call
 from optparse import OptionParser
 from tornado.gen import coroutine
@@ -146,6 +148,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._partition_bandwidth = None
         self._centre_frequency = None
         self._transient_buffer = None
+        self._feng_config = None
         self._tb_params = {}
 
         super(FbfWorkerServer, self).__init__(ip, port)
@@ -412,18 +415,39 @@ class FbfWorkerServer(AsyncDeviceServer):
         req.reply("ok",)
         os.system("docker restart {}".format(idx))
 
+    @request(Str())
+    @return_reply()
+    def request_set_complex_gains(self, req, gains):
+        """
+        @brief  Set the complex gains to non-unity values
+
+        @detail   This method is used to support commensal FBFUSE operation when
+                  phasing solutions are not applied to the telescope.
+
+        @param   packed_gains_npy  The gain array in AFP order as a tostring numpy array
+        """
+        if not self._feng_config:
+            return ("fail", "No F-engine config set")
+        try:
+            gains = cPickle.loads(gains)
+        except Exception as error:
+            return ("fail", "Could not parse gain pickle: {}".format(str(error)))
+
+
+
+
     @request(Str(), Float(), Float(), Float(), Str())
     @return_reply()
     def request_trigger_tb_dump(self, req, utc_start, width, dm, ref_freq, trigger_id):
         """
-        @brief
+        @brief      Request that the transient buffer be dumped
 
-        @param      req:         The request object
-        @param      utc_start:   The utc start (as ISO-8601 UTC)
-        @param      width:       The width of the event in seconds
-        @param      dm:          The dispersion measure in pccm
-        @param      ref_freq:    The reference frequency in Hz
-        @param      trigger_id:  A unique trigger identifier
+        @param      req         The request object
+        @param      utc_start   The utc start (as ISO-8601 UTC)
+        @param      width       The width of the event in seconds
+        @param      dm          The dispersion measure in pccm
+        @param      ref_freq    The reference frequency in Hz
+        @param      trigger_id  A unique trigger identifier
         """
         log.info("Received request for transient buffer capture")
         log.info("Event parameters: {}, {}, {}, {}, {}".format(utc_start, width, dm, ref_freq, trigger_id))
@@ -511,6 +535,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         log.info("Preparing worker server instance")
         try:
             feng_config = json.loads(feng_config)
+            self._feng_config = feng_config
         except Exception as error:
             msg = ("Unable to parse F-eng config with "
                    "error: {}").format(str(error))
@@ -784,7 +809,11 @@ class FbfWorkerServer(AsyncDeviceServer):
                 idx] for idx in coherent_beam_feng_capture_order]
 
             nants = len(feng_capture_order_info['order'])
-            self._gain_buffer_ctrl = GainBufferController(nants, partition_nchans, 2)
+            antenna_capture_order = [feng_to_antenna_map[
+                idx] for idx in feng_capture_order_info['order']]
+            self._gain_buffer_ctrl = GainBufferController(
+                nants, partition_nchans, 2,
+                antenna_capture_order)
             self._gain_buffer_ctrl.create()
             self._gain_buffer_ctrl.update_gains()
 

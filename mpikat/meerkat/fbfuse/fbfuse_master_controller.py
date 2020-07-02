@@ -329,10 +329,10 @@ class FbfMasterController(MasterController):
             log.debug("{}: {}".format(key, value))
 
         log.info("Starting subarray activity tracker")
-        activity_tracker = SubarrayActivity(streams['cam.http']['camdata'])
         product = FbfProductController(
             self, product_id, observers, n_channels,
-            feng_groups, proxy_name, feng_config, activity_tracker)
+            feng_groups, proxy_name, feng_config,
+            streams['cam.http']['camdata'], self._katportal_wrapper_type)
         self._products[product_id] = product
         self._update_products_sensor()
         log.debug("Configured FBFUSE instance with ID: {}".format(product_id))
@@ -453,10 +453,8 @@ class FbfMasterController(MasterController):
             target = Target(target)
         except Exception as error:
             raise Return(("fail", str(error)))
-        try:
-            yield product.target_start(target)
-        except Exception as error:
-            log.error(str(error))
+        yield product.target_start(target)
+        yield product.rescale()
         raise Return(("ok",))
 
     @request(Str())
@@ -805,9 +803,7 @@ class FbfMasterController(MasterController):
         """
         @brief      Add default FBFUSE nodes to the server pool
         """
-        for idx in range(33):
-            if idx == 20:
-                continue
+        for idx in range(32):
             self._server_pool.add("fbfpn{:02d}.mpifr-be.mkat.karoo.kat.ac.za".format(idx), 6000)
             self._server_pool.add("fbfpn{:02d}.mpifr-be.mkat.karoo.kat.ac.za".format(idx), 6001)
         return ("ok",)
@@ -833,7 +829,7 @@ class FbfMasterController(MasterController):
         """
         @brief      Request rescaling of FBFUSE channels
         """
-	@coroutine
+        @coroutine
         def wrapper():
             try:
                 yield product.rescale()
@@ -842,44 +838,97 @@ class FbfMasterController(MasterController):
             else:
                 req.reply("ok",)
 
-	try:
+        try:
             product = self._get_product(product_id)
         except ProductLookupError as error:
             req.reply("fail", str(error))
         else:
             self.ioloop.add_callback(wrapper)
-	raise AsyncReply
+        raise AsyncReply
 
     @request(Str(), Str(), Float(), Float(), Float(), Str())
     def request_trigger_tb_dump(self, req, product_id, utc_start, width, dm, ref_freq, trigger_id):
         """
         @brief   Request a transient buffer dump on the FBFUSE nodes
 
-        @param      req:         The request object
-        @param      product_id:  The product identifier
-        @param      utc_start:   The utc start (as ISO-8601 UTC)
-        @param      width:       The width of the event in seconds
-        @param      dm:          The dispersion measure in pccm
-        @param      ref_freq:    The reference frequency in Hz
-        @param      trigger_id:  A unique trigger identifier
+        @param      req         The request object
+        @param      product_id  The product identifier
+        @param      utc_start   The utc start (as ISO-8601 UTC)
+        @param      width       The width of the event in seconds
+        @param      dm          The dispersion measure in pccm
+        @param      ref_freq    The reference frequency in Hz
+        @param      trigger_id  A unique trigger identifier
         """
-	@coroutine 
+        @coroutine
         def wrapper():
-	    try:
-                yield product.trigger_tb_dump(	
+            try:
+                yield product.trigger_tb_dump(
                     utc_start, width, dm, ref_freq, trigger_id)
-	    except Exception as error:
+            except Exception as error:
                 log.exception("Failed to run trigger dump: {}".format(str(error)))
                 req.reply("fail", str(error))
-	    else:
-		req.reply("ok",)
+            else:
+                req.reply("ok",)
         try:
             product = self._get_product(product_id)
         except ProductLookupError as error:
             req.reply("fail", str(error))
         else:
-	    self.ioloop.add_callback(wrapper)
-	raise AsyncReply
+            self.ioloop.add_callback(wrapper)
+        raise AsyncReply
+
+    @request(Str())
+    def request_set_default_complex_gains(self, req, product_id):
+        """
+        Sets the default complex gains (1.0).
+
+        @param      req         The request object
+        @param      product_id  The product identifier
+        """
+        @coroutine
+        def wrapper():
+            try:
+                yield product.set_default_complex_gains()
+            except Exception as error:
+                log.exception("Failed to set default complex gains: {}".format(
+                    str(error)))
+                req.reply("fail", str(error))
+            else:
+                req.reply("ok",)
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            req.reply("fail", str(error))
+        else:
+            self.ioloop.add_callback(wrapper)
+        raise AsyncReply
+
+    @request(Str())
+    def request_set_telstate_complex_gains(self, req, product_id):
+        """
+        Sets the complex gains to the latest solution in telstate.
+
+        @param      req         The request object
+        @param      product_id  The product identifier
+        """
+        @coroutine
+        def wrapper():
+            try:
+                yield product.set_telstate_complex_gains()
+            except Exception as error:
+                log.exception("Failed to set default complex gains: {}".format(
+                    str(error)))
+                req.reply("fail", str(error))
+            else:
+                req.reply("ok",)
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            req.reply("fail", str(error))
+        else:
+            self.ioloop.add_callback(wrapper)
+        raise AsyncReply
+
 
 @coroutine
 def on_shutdown(ioloop, server):

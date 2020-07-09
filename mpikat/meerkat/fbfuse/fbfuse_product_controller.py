@@ -40,7 +40,6 @@ from mpikat.meerkat.fbfuse import (
     BeamAllocationError,
     DelayConfigurationServer,
     FbfConfigurationManager)
-from mpikat.meerkat.fbfuse.fbfuse_gains_helper import get_gains
 from mpikat.meerkat.katportalclient_wrapper import SubarrayActivity
 
 N_FENG_STREAMS_PER_WORKER = 4
@@ -1051,6 +1050,7 @@ class FbfProductController(object):
         for server in self._servers:
             idx = self._server_configs[server][2]
             step = 4 * self._server_configs[server][1]
+            step = self._server_configs[server][1] * 4
             server_gains = {}
             # keys here include h and v so we strip those
             for key, g_array in gains.items():

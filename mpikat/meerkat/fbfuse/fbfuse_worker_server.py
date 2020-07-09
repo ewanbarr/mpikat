@@ -432,9 +432,11 @@ class FbfWorkerServer(AsyncDeviceServer):
             gains = cPickle.loads(gains)
         except Exception as error:
             return ("fail", "Could not parse gain pickle: {}".format(str(error)))
-
-
-
+	try:
+	    self._gain_buffer_ctrl.set_gains(gains)
+        except Exception as error:
+            return ("fail", str(error))
+        return ("ok",)
 
     @request(Str(), Float(), Float(), Float(), Str())
     @return_reply()

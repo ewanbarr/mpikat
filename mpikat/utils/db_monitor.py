@@ -7,17 +7,20 @@ log = logging.getLogger('mpikat.db_monitor')
 
 
 class DbMonitor(object):
-    def __init__(self, key, callback=None):
+    def __init__(self, key, reader=0, callback=None):
         self._key = key
         self._callback = callback
+        self._reader = reader
         self._dbmon_proc = None
         self._mon_thread = None
+        self._rstart = 5 + 5 * reader
+        self._rend = 5 + 5 * (reader + 1)
 
     def _stdout_parser(self, line):
         line = line.strip()
         try:
             values = map(int, line.split())
-            free, full, clear, written, read = values[5:]
+            free, full, clear, written, read = values[self._rstart:self._rend]
             fraction = float(full)/(full + free)
             params = {
                 "fraction-full": fraction,

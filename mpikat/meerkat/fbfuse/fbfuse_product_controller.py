@@ -26,6 +26,7 @@ import time
 import struct
 import base64
 import cPickle
+import numpy as np
 from copy import deepcopy
 from tornado.gen import coroutine, Return
 from tornado.locks import Event
@@ -94,7 +95,11 @@ class FbfProductController(object):
         self._product_id = product_id
         self._antennas = ",".join([a.name for a in katpoint_antennas])
         self._katpoint_antennas = katpoint_antennas
-        self._antenna_map = {a.name: a for a in self._katpoint_antennas}
+        self._antenna_map = {}
+        self._antenna_weights = {}
+        for antenna in self._katpoint_antennas:
+            self._antenna_map[antenna.name] = antenna
+            self._antenna_weights = np.ones(n_channels)
         self._n_channels = n_channels
         self._streams = ip_range_from_stream(feng_streams)
         self._proxy_name = proxy_name
@@ -1033,22 +1038,25 @@ class FbfProductController(object):
                         self._servers[ii], str(error)))
 
     @coroutine
-    def set_telstate_complex_gains(self):
+    def apply_telstate_complex_gains(self):
         if not self.capturing:
             raise FbfProductStateError([self.CAPTURING], self.state)
         # first get complex gains
         self.log.info("Fetching latest complex gains from telstate")
         kpc = self._katportal_wrapper_type(self._kpc_url)
-        gains = kpc.get_gains()
+        gains = yield kpc.get_gains()
         self.log.info("Received gains for the following inputs: {}".format(
             sorted(gains.keys())))
         futures = []
         for server in self._servers:
             idx = self._server_configs[server][2]
-            step = self._server_configs[server][1]
+            step = 4 * self._server_configs[server][1]
             server_gains = {}
+            # keys here include h and v so we strip those
             for key, g_array in gains.items():
-                server_gains[key] = g_array[idx * step: (idx+1) * step]
+                antenna = key.rstrip("vh")
+                scalar_weights = self._antenna_weights[antenna][idx: (idx+step)]
+                server_gains[key] = scalar_weights * g_array[idx: (idx+step)]
             self.log.debug("Selecting gains for channels {}:{} for {}".format(
                 idx * step, (idx+1) * step, server))
             futures.append(server.set_complex_gains(
@@ -1062,19 +1070,29 @@ class FbfProductController(object):
                         self._servers[ii], str(error)))
 
     @coroutine
-    def set_default_complex_gains(self):
+    def apply_default_complex_gains(self):
         if not self.capturing:
             raise FbfProductStateError([self.CAPTURING], self.state)
-        self.log.info("Setting complex gains back to default value (1+0i)")
+        self.log.info("Setting complex gains to 1.0 (scalar antenna weights are preserved)")
         futures = []
         for server in self._servers:
-            futures.append(server.reset_complex_gains())
+            idx = self._server_configs[server][2]
+            step = 4 * self._server_configs[server][1]
+            server_gains = {}
+            for antenna in self._antenna_weights.keys():
+                scalar_weights = self._antenna_weights[antenna][idx: (idx+step)]
+                for pol in ["v", "h"]:
+                    server_gains[antenna + pol] = scalar_weights.astype("complex64")
+            self.log.debug("Selecting gains for channels {}:{} for {}".format(
+                idx * step, (idx+1) * step, server))
+            futures.append(server.set_complex_gains(
+                cPickle.dumps(server_gains)))
         for ii, future in enumerate(futures):
             try:
                 yield future
             except Exception as error:
                 log.exception(
-                    "Error when setting default gains on server {}: {}".format(
+                    "Error when setting telstate gains on server {}: {}".format(
                         self._servers[ii], str(error)))
 
     @coroutine
@@ -1375,5 +1393,33 @@ class FbfProductController(object):
             raise FbfProductStateError(valid_states, self.state)
         self._beam_manager.reset()
 
+    def set_antenna_weights(self, antenna, weights):
+        """
+        @brief      Sets the antenna weights.
 
+        @param      antenna:  The antenna name to set the weights for
+                              (e.g. m001)
+        @param      weights:  Scalar weights either as a single value
+                              of vector of per channel weights
 
+        @note   These weights are only applied on a complex gain application
+        """
+        if antenna not in self._antenna_weights:
+            msg = "No weights managed for antenna: {}".format(antenna)
+            log.error(msg)
+            raise Exception(msg)
+        if len(weights) not in [1, self._n_channels]:
+            msg = "Unexpected number of channel weights: {}".format(len(weights))
+            log.error(msg)
+            raise Exception(msg)
+        self._antenna_weights[antenna][:] = weights
+
+    def reset_antenna_weights(self):
+        """
+        @brief      Reset all antenna weights to unity
+
+        @note   These weights are only applied on a complex gain application
+        """
+        for antenna in self._antenna_weights.keys():
+            self._antenna_weights[antenna] = np.ones(
+                self._n_channels, dtype="float32")

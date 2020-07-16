@@ -143,7 +143,8 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._capture_interface = capture_interface
         self._capture_monitor = None
         self._autoscaling_key = "autoscaling_trigger"
-        self._autoscaling_trigger = AutoscalingTrigger(key=self._autoscaling_key)
+        self._autoscaling_trigger = AutoscalingTrigger(
+            key=self._autoscaling_key)
         self._output_level = 10.0
         self._partition_bandwidth = None
         self._centre_frequency = None
@@ -263,6 +264,14 @@ class FbfWorkerServer(AsyncDeviceServer):
             initial_status=Sensor.UNKNOWN,
             unit="%")
         self.add_sensor(self._ingress_buffer_percentage)
+
+        self._transient_buffer_percentage = Sensor.float(
+            "transient-buffer-fill-level",
+            description=("The percentage fill level for the transient buffer"),
+            default=0.0,
+            initial_status=Sensor.UNKNOWN,
+            unit="%")
+        self.add_sensor(self._transient_buffer_percentage)
 
         self._cb_egress_buffer_percentage = Sensor.float(
             "cb-egress-buffer-fill-level",
@@ -432,8 +441,8 @@ class FbfWorkerServer(AsyncDeviceServer):
             gains = cPickle.loads(gains)
         except Exception as error:
             return ("fail", "Could not parse gain pickle: {}".format(str(error)))
-	try:
-	    self._gain_buffer_ctrl.set_gains(gains)
+        try:
+            self._gain_buffer_ctrl.set_gains(gains)
         except Exception as error:
             return ("fail", str(error))
         return ("ok",)
@@ -1012,14 +1021,21 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._capture_monitor = PeriodicCallback(exit_check_callback, 1000)
         self._capture_monitor.start()
 
-        def dada_callback(params):
-            self._ingress_buffer_percentage.set_value(params["fraction-full"])
-
         # start DB monitors
         self._ingress_buffer_monitor = DbMonitor(
             self._dada_input_key,
-            callback=dada_callback)
+            callback=lambda params:
+            self._ingress_buffer_percentage.set_value(
+                params["fraction-full"]),
+            reader=0)
         self._ingress_buffer_monitor.start()
+        self._transient_buffer_monitor = DbMonitor(
+            self._dada_input_key,
+            callback=lambda params:
+            self._transient_buffer_percentage.set_value(
+                params["fraction-full"]),
+            reader=1)
+        self._transient_buffer_monitor.start()
         self._cb_egress_buffer_monitor = DbMonitor(
             self._dada_input_key,
             callback=lambda params:
@@ -1072,6 +1088,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._state_sensor.set_value(self.STOPPING)
         self._capture_monitor.stop()
         self._ingress_buffer_monitor.stop()
+        self._transient_buffer_monitor.stop()
         self._cb_egress_buffer_monitor.stop()
         self._ib_egress_buffer_monitor.stop()
         log.info("Stopping MKRECV instance")

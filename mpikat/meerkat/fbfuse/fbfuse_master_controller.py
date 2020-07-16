@@ -878,7 +878,7 @@ class FbfMasterController(MasterController):
         raise AsyncReply
 
     @request(Str())
-    def request_set_default_complex_gains(self, req, product_id):
+    def request_apply_default_complex_gains(self, req, product_id):
         """
         Sets the default complex gains (1.0).
 
@@ -888,7 +888,7 @@ class FbfMasterController(MasterController):
         @coroutine
         def wrapper():
             try:
-                yield product.set_default_complex_gains()
+                yield product.apply_default_complex_gains()
             except Exception as error:
                 log.exception("Failed to set default complex gains: {}".format(
                     str(error)))
@@ -904,7 +904,7 @@ class FbfMasterController(MasterController):
         raise AsyncReply
 
     @request(Str())
-    def request_set_telstate_complex_gains(self, req, product_id):
+    def request_apply_telstate_complex_gains(self, req, product_id):
         """
         Sets the complex gains to the latest solution in telstate.
 
@@ -914,7 +914,7 @@ class FbfMasterController(MasterController):
         @coroutine
         def wrapper():
             try:
-                yield product.set_telstate_complex_gains()
+                yield product.apply_telstate_complex_gains()
             except Exception as error:
                 log.exception("Failed to set default complex gains: {}".format(
                     str(error)))
@@ -928,6 +928,56 @@ class FbfMasterController(MasterController):
         else:
             self.ioloop.add_callback(wrapper)
         raise AsyncReply
+
+    @request(Str(), Str(), Str())
+    @return_reply
+    def request_set_antenna_weights(self, req, product_id, antenna, weights_csv):
+        """
+        @brief      Sets the antenna weights.
+
+        @param      req           The request object
+        @param      product_id    The product identifier
+        @param      antenna       The antenna name to set the weights for
+                                  (e.g. m001)
+        @param      weights_csv   Scalar weights either as a single value
+                                  of vector of per channel weights
+
+        @note   These weights are only applied on a complex gain application
+        """
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            return ("fail", str(error))
+        try:
+            weights = list(map(float, weights_csv.split(",")))
+            product.set_antenna_weights(antenna, weights)
+        except Exception as error:
+            log.exception(str(error))
+            return ("fail", str(error))
+        else:
+            return ("ok",)
+
+    @request(Str())
+    @return_reply
+    def request_reset_antenna_weights(self, req, product_id):
+        """
+        @brief      Reset the antenna weights to unity.
+
+        @param      req         The request object
+        @param      product_id  The product identifier
+        @note       These weights are only applied on a complex gain application
+        """
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            return ("fail", str(error))
+        try:
+            product.reset_antenna_weights()
+        except Exception as error:
+            log.exception(str(error))
+            return ("fail", str(error))
+        else:
+            return ("ok",)
 
 
 @coroutine

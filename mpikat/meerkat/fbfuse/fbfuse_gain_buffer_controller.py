@@ -148,4 +148,8 @@ class GainBufferController(object):
         self._shared_buffer_mmap.seek(0)
         self._shared_buffer_mmap.write(self._gains.ravel().tobytes())
 
+    def save_gains(self, fname):
+        log.debug("Saving gains to {}".format(fname))
+        np.save(fname, self._gains)
+
 

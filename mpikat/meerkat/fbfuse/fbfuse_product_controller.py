@@ -1038,16 +1038,16 @@ class FbfProductController(object):
         # first get complex gains
         self.log.info("Fetching latest complex gains from telstate")
         kpc = self._katportal_wrapper_type(self._kpc_url)
-        gains = kpc.get_gains()
+        gains = yield kpc.get_gains()
         self.log.info("Received gains for the following inputs: {}".format(
             sorted(gains.keys())))
         futures = []
         for server in self._servers:
             idx = self._server_configs[server][2]
-            step = self._server_configs[server][1]
+            step = self._server_configs[server][1] * 4
             server_gains = {}
             for key, g_array in gains.items():
-                server_gains[key] = g_array[idx * step: (idx+1) * step]
+                server_gains[key] = g_array[idx: idx + step]
             self.log.debug("Selecting gains for channels {}:{} for {}".format(
                 idx * step, (idx+1) * step, server))
             futures.append(server.set_complex_gains(

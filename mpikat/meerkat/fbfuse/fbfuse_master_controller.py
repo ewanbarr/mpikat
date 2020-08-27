@@ -930,7 +930,7 @@ class FbfMasterController(MasterController):
         raise AsyncReply
 
     @request(Str(), Str(), Str())
-    @return_reply
+    @return_reply()
     def request_set_antenna_weights(self, req, product_id, antenna, weights_csv):
         """
         @brief      Sets the antenna weights.
@@ -958,7 +958,7 @@ class FbfMasterController(MasterController):
             return ("ok",)
 
     @request(Str())
-    @return_reply
+    @return_reply()
     def request_reset_antenna_weights(self, req, product_id):
         """
         @brief      Reset the antenna weights to unity.

@@ -44,7 +44,40 @@ from mpikat.meerkat.katportalclient_wrapper import SubarrayActivity
 
 N_FENG_STREAMS_PER_WORKER = 4
 COH_ANTENNA_GRANULARITY = 4
-
+HOST_SORTING_ORDER = [
+    "fbfpn00.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn01.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn02.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn03.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn04.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn05.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn06.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn07.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn08.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn09.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn10.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn11.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn12.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn13.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn14.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn15.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn16.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn17.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn18.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn19.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn32.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn21.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn22.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn23.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn24.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn25.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn26.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn27.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn28.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn29.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn30.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn31.mpifr-be.mkat.karoo.kat.ac.za"
+]
 log = logging.getLogger("mpikat.fbfuse_product_controller")
 
 
@@ -98,7 +131,7 @@ class FbfProductController(object):
         self._antenna_weights = {}
         for antenna in self._katpoint_antennas:
             self._antenna_map[antenna.name] = antenna
-            self._antenna_weights = np.ones(n_channels)
+            self._antenna_weights[antenna.name] = np.ones(n_channels)
         self._n_channels = n_channels
         self._streams = ip_range_from_stream(feng_streams)
         self._proxy_name = proxy_name
@@ -846,8 +879,11 @@ class FbfProductController(object):
         self._ibc_mcast_group_data_rate_sensor.set_value(ibc_group_rate)
         self._servers = self._parent._server_pool.allocate(
             min(nworkers_available, mcast_config['num_workers_total']))
+        #self._servers = sorted(
+        #    self._servers, key=lambda server: server.hostname)
         self._servers = sorted(
-            self._servers, key=lambda server: server.hostname)
+            self._servers, key=lambda server: HOST_SORTING_ORDER.index(server.hostname))
+
         server_str = ",".join(["{s.hostname}:{s.port}".format(
             s=server) for server in self._servers])
         self._servers_sensor.set_value(server_str)
@@ -1047,20 +1083,26 @@ class FbfProductController(object):
         self.log.info("Received gains for the following inputs: {}".format(
             sorted(gains.keys())))
         futures = []
-        for server in self._servers:
-            idx = self._server_configs[server][2]
-            step = 4 * self._server_configs[server][1]
-            step = self._server_configs[server][1] * 4
-            server_gains = {}
-            # keys here include h and v so we strip those
-            for key, g_array in gains.items():
-                antenna = key.rstrip("vh")
-                scalar_weights = self._antenna_weights[antenna][idx: (idx+step)]
-                server_gains[key] = scalar_weights * g_array[idx: (idx+step)]
-            self.log.debug("Selecting gains for channels {}:{} for {}".format(
-                idx * step, (idx+1) * step, server))
-            futures.append(server.set_complex_gains(
-                cPickle.dumps(server_gains)))
+
+        self.log.debug("Current _servers: {}".format(str(self._servers)))
+        self.log.debug("Current _server_configs: {}".format(str(self._server_configs)))
+
+        for server in self._server_configs.keys():
+            try:
+                idx = self._server_configs[server][2]
+                step = 4 * self._server_configs[server][1]
+                server_gains = {}
+                # keys here include h and v so we strip those
+                for key, g_array in gains.items():
+                    antenna = key.rstrip("vh")
+                    scalar_weights = self._antenna_weights[antenna][idx: (idx+step)]
+                    server_gains[key] = (scalar_weights * g_array[idx: (idx+step)]).astype("complex64")
+                self.log.debug("Selecting gains for channels {}:{} for {}".format(
+                    idx, idx+ step, server))
+                futures.append(server.set_complex_gains(
+                    cPickle.dumps(server_gains, 1)))
+            except Exception as error:
+                self.log.exception("Failed to dispatch set gain request for node {}".format(str(server)))
         for ii, future in enumerate(futures):
             try:
                 yield future
@@ -1068,6 +1110,9 @@ class FbfProductController(object):
                 log.exception(
                     "Error when setting telstate gains on server {}: {}".format(
                         self._servers[ii], str(error)))
+	yield self.rescale()
+	
+
 
     @coroutine
     def apply_default_complex_gains(self):
@@ -1075,7 +1120,7 @@ class FbfProductController(object):
             raise FbfProductStateError([self.CAPTURING], self.state)
         self.log.info("Setting complex gains to 1.0 (scalar antenna weights are preserved)")
         futures = []
-        for server in self._servers:
+        for server in self._server_configs.keys():
             idx = self._server_configs[server][2]
             step = 4 * self._server_configs[server][1]
             server_gains = {}
@@ -1086,7 +1131,7 @@ class FbfProductController(object):
             self.log.debug("Selecting gains for channels {}:{} for {}".format(
                 idx * step, (idx+1) * step, server))
             futures.append(server.set_complex_gains(
-                cPickle.dumps(server_gains)))
+                cPickle.dumps(server_gains, 1)))
         for ii, future in enumerate(futures):
             try:
                 yield future
@@ -1283,7 +1328,7 @@ class FbfProductController(object):
         self.log.debug("Product moved to 'starting' state")
         futures = []
         for server in self._servers:
-            futures.append(server.capture_start())
+            futures.append(server.capture_start(timeout=10.0))
         for ii, future in enumerate(futures):
             try:
                 yield future

@@ -1041,7 +1041,8 @@ class FbfProductController(object):
         else:
             self.log.warning("No configuration authority is set, "
                              "using default beam configuration")
-
+        self._parent.ioloop.add_callback(self.apply_telstate_complex_gains)
+         
     @coroutine
     def rescale(self):
         if not self.capturing:
@@ -1100,7 +1101,7 @@ class FbfProductController(object):
                 self.log.debug("Selecting gains for channels {}:{} for {}".format(
                     idx, idx+ step, server))
                 futures.append(server.set_complex_gains(
-                    cPickle.dumps(server_gains, 1)))
+                    cPickle.dumps(server_gains, 1), timeout=30.0))
             except Exception as error:
                 self.log.exception("Failed to dispatch set gain request for node {}".format(str(server)))
         for ii, future in enumerate(futures):
@@ -1131,7 +1132,7 @@ class FbfProductController(object):
             self.log.debug("Selecting gains for channels {}:{} for {}".format(
                 idx * step, (idx+1) * step, server))
             futures.append(server.set_complex_gains(
-                cPickle.dumps(server_gains, 1)))
+                cPickle.dumps(server_gains, 1), timeout=30.0))
         for ii, future in enumerate(futures):
             try:
                 yield future

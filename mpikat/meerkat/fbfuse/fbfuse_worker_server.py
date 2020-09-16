@@ -979,7 +979,7 @@ class FbfWorkerServer(AsyncDeviceServer):
             " ".join(map(str, psrdada_cpp_cmdline)))
         log.debug(" ".join(map(str, psrdada_cpp_cmdline)))
         self._psrdada_cpp_proc = ManagedProcess(psrdada_cpp_cmdline)
-
+        time.sleep(1)
         self._transient_buffer = TransientBuffer(
             self._dada_input_key,
             self._tb_params['total_nantennas'],
@@ -1037,13 +1037,13 @@ class FbfWorkerServer(AsyncDeviceServer):
             reader=1)
         self._transient_buffer_monitor.start()
         self._cb_egress_buffer_monitor = DbMonitor(
-            self._dada_input_key,
+            self._dada_coh_output_key,
             callback=lambda params:
             self._cb_egress_buffer_percentage.set_value(
                 params["fraction-full"]))
         self._cb_egress_buffer_monitor.start()
         self._ib_egress_buffer_monitor = DbMonitor(
-            self._dada_input_key,
+            self._dada_incoh_output_key,
             callback=lambda params:
             self._ib_egress_buffer_percentage.set_value(
                 params["fraction-full"]))

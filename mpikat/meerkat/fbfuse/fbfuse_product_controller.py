@@ -40,7 +40,7 @@ from mpikat.meerkat.fbfuse import (
     BeamAllocationError,
     DelayConfigurationServer,
     FbfConfigurationManager)
-from mpikat.meerkat.katportalclient_wrapper import SubarrayActivity
+from mpikat.meerkat.katportalclient_wrapper import SubarrayActivity, simple_activity_wait
 
 N_FENG_STREAMS_PER_WORKER = 4
 COH_ANTENNA_GRANULARITY = 4
@@ -142,7 +142,7 @@ class FbfProductController(object):
         self._ca_client = None
         self._kpc_url = kpc_url
         self._activity_tracker_interrupt = Event()
-        self._activity_tracker = SubarrayActivity(self._kpc_url)
+        #self._activity_tracker = SubarrayActivity(self._kpc_url)
         self._katportal_wrapper_type = kpc_wrapper_type
         self._previous_sb_config = None
         self._managed_sensors = []
@@ -900,15 +900,34 @@ class FbfProductController(object):
     @coroutine
     def get_ca_target_configuration(self, boresight_target):
 
+        # This should all now be a delayed callaback
+
+        # Flow here is
+        # 1. target-start received
+        # 2. set all suspect flags to true
+        # 3. talk to the CA
+        # 4. wait for being on target
+        # 5. phase up
+        # 6. rescale
+        # 7. wait ~2 seconds
+        # 8. set all suspect flags to false
+
+        # How to handle mutliple target-starts in quick succession?
+        # Can override with the interrupt
+
         @coroutine
-        def wait_for_track(callback):
+        def wait_for_track():
+            # Here we interrupt any active wait_for_track coroutines
+            self._activity_tracker_interrupt.set()
+            yield sleep(1)
+            self._activity_tracker_interrupt.clear()
             self.log.debug("Waiting for subarray to enter 'track' state")
             try:
-                yield self._activity_tracker.wait_until(
-                    "track", self._activity_tracker_interrupt)
+                yield simple_activity_wait(
+                    self._kpc_url, "track",
+                    self._activity_tracker_interrupt)
             except Interrupt:
-                self.log.debug("Interrupting callback waiting on 'track' state")
-                pass
+                self.log.warning("Interrupting callback waiting on 'track' state")
             except Exception as error:
                 log.error(
                     "Unknown error while waiting on telescope to enter 'track' state: {}".format(
@@ -916,15 +935,21 @@ class FbfProductController(object):
             else:
                 try:
                     yield self.rescale()
+                    yield sleep(2)
+                    # Set suspect flags all to true
+                    self._ibc_data_suspect.set_value(False)
+                    self._cbc_data_suspect.set_value(False)
                 except Exception as error:
-                    log.error("Unable to rescale with error: {}".format(str(error)))
-                callback()
+                    log.error("Error during phase-up/rescale process: {}".format(
+                        str(error)))
+                    log.warning("Data suspect flags will remain in True state")
 
         def ca_target_update_callback(received_timestamp, timestamp, status,
                                       value):
             # TODO, should we really reset all the beams or should we have
             # a mechanism to only update changed beams
             config_dict = json.loads(value)
+            self._ibc_data_suspect.set_value(True)
             self._cbc_data_suspect.set_value(True)
             self.reset_beams()
             for target_string in config_dict.get('beams', []):
@@ -946,14 +971,21 @@ class FbfProductController(object):
                 epoch = float(tiling['epoch'])
                 self.add_tiling(target, nbeams, freq, overlap, epoch)
             self._ca_target_request_sensor.set_value(json.dumps(config_dict))
-            self._parent.ioloop.add_callback(
-                wait_for_track,
-                lambda: self._cbc_data_suspect.set_value(False))
+            self._parent.ioloop.add_callback(wait_for_track)
 
-        # Here we interrupt any active wait_for_track coroutines
-        self._activity_tracker_interrupt.set()
+        # Set suspect flags all to true
+        self._ibc_data_suspect.set_value(True)
+        self._cbc_data_suspect.set_value(True)
 
-        # Here we generate a plot from the PSF
+        try:
+            yield self.apply_telstate_complex_gains()
+        except Exception as error:
+            log.error("Phase up failed with error: {}".format(str(error)))
+            log.warning("Continuing without phase-up")
+
+        # Here we communicate the new target
+        # to the CA to allow for an update
+        # of the target configuration sensor
         yield self._ca_client.until_synced(timeout=10.0)
         sensor_name = "{}_beam_position_configuration".format(self._product_id)
         if sensor_name in self._ca_client.sensor:
@@ -971,16 +1003,17 @@ class FbfProductController(object):
                             "failed with error: {}").format(str(error)))
             raise error
         yield self._ca_client.until_synced(timeout=10.0)
-
-        # Clear the state on the interrupt event for wait_for_track coroutines
-        self._activity_tracker_interrupt.clear()
-
         sensor = self._ca_client.sensor[sensor_name]
         sensor.register_listener(ca_target_update_callback)
         self._ca_client.set_sampling_strategy(sensor.name, "event")
-        self._parent.ioloop.add_callback(
-            wait_for_track,
-            lambda: self._ibc_data_suspect.set_value(False))
+
+        # previously we set a second wait here for the IB
+        # this doesn't make sense any more due to the scaling
+        # issues we have. As such the IB and CB flags should
+        # always be the same.
+        # Here we are relying on a an update to the
+        # beam_position_configuration sensor to trigger
+        # the pull for the right setup. This means we always need a CA...
 
     def _beam_to_sensor_string(self, beam):
         return beam.target.format_katcp()
@@ -1029,8 +1062,6 @@ class FbfProductController(object):
 
     @coroutine
     def target_start(self, target):
-        self._ibc_data_suspect.set_value(True)
-        self._cbc_data_suspect.set_value(True)
         self._phase_reference_sensor.set_value(target.format_katcp())
         self._delay_config_server._phase_reference_sensor.set_value(
             target.format_katcp())
@@ -1039,10 +1070,8 @@ class FbfProductController(object):
             self._parent.ioloop.add_callback(
                 self.get_ca_target_configuration, target)
         else:
-            self.log.warning("No configuration authority is set, "
-                             "using default beam configuration")
-        self._parent.ioloop.add_callback(self.apply_telstate_complex_gains)
-         
+            self.log.error("No configuration authority is set")
+
     @coroutine
     def rescale(self):
         if not self.capturing:
@@ -1112,7 +1141,7 @@ class FbfProductController(object):
                     "Error when setting telstate gains on server {}: {}".format(
                         self._servers[ii], str(error)))
 	yield self.rescale()
-	
+
 
 
     @coroutine
@@ -1285,7 +1314,7 @@ class FbfProductController(object):
             self._state_sensor.set_value(self.READY)
             self.log.info("Successfully prepared FBFUSE product")
         yield self.set_levels(7.0)
-        yield self._activity_tracker.start()
+        #yield self._activity_tracker.start()
 
     @coroutine
     def deconfigure(self):

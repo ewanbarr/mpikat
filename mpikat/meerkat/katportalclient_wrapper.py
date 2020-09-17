@@ -670,6 +670,33 @@ class SubarrayActivity(SensorTracker):
             host, "subarray", "observation_activity")
 
 
+@coroutine
+def simple_activity_wait(host, state, interrupt):
+    sensor_name = "observation_activity"
+    component = "subarray"
+    log.debug("Waiting for observation_activity to go to {}".format(
+        state))
+    client = KATPortalClient(
+        host,
+        logger=logging.getLogger('katcp'))
+    namespace = 'namespace_' + str(uuid.uuid4())
+    yield client.connect()
+    full_sensor_name = yield client.sensor_subarray_lookup(
+            component=component, sensor=sensor_name,
+            return_katcp_name=False)
+    while True:
+        sensor_sample = yield client.sensor_value(
+            full_sensor_name,
+            include_value_ts=False)
+        if interrupt.is_set():
+            raise Interrupt
+        elif sensor_sample.value == state:
+            break
+        else:
+            yield sleep(1)
+    yield client.disconnect()
+
+
 if __name__ == "__main__":
     import tornado
     host = "http://portal.mkat.karoo.kat.ac.za/api/client/1"

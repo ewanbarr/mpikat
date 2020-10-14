@@ -620,13 +620,21 @@ class FbfProductController(object):
         self._ca_address_sensor.set_value("{}:{}".format(hostname, port))
 
     @coroutine
-    def reset_workers(self):
-        for server in self.servers:
+    def reset_workers(self, timeout=60.0):
+        for server in self._servers:
             try:
                 yield server.reset()
             except Exception as error:
                 log.exception("Could not reset worker '{}' with error: {}".format(
                     str(server), str(error)))
+        start = time.time()
+        while time.time() < start + timeout:
+            if all([server.is_connected() for server in self._servers]):
+                raise Return()
+            else:
+                yield sleep(1)
+        log.warning("Not all servers reset within {} second timeout".format(
+            timeout))
 
     @coroutine
     def get_sb_configuration(self, sb_id):
@@ -682,7 +690,7 @@ class FbfProductController(object):
                 log.exception(
                     "Unable to deconfigure server {}: {}".format(
                         self._servers[ii], str(error)))
-        self.reset_workers()
+        yield self.reset_workers()
         self._parent._server_pool.deallocate(self._servers)
         self._servers = []
         if self._ibc_mcast_group:

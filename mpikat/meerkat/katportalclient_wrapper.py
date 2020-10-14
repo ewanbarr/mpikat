@@ -678,9 +678,11 @@ def simple_activity_wait(host, state, interrupt):
         state))
     client = KATPortalClient(
         host,
+        on_update_callback=None,
         logger=logging.getLogger('katcp'))
-    namespace = 'namespace_' + str(uuid.uuid4())
-    yield client.connect()
+    #namespace = 'namespace_' + str(uuid.uuid4())
+    #NOTE: Commenting this out based on comment seen in examples for katportal 
+    #yield client.connect()
     full_sensor_name = yield client.sensor_subarray_lookup(
             component=component, sensor=sensor_name,
             return_katcp_name=False)
@@ -694,7 +696,7 @@ def simple_activity_wait(host, state, interrupt):
             break
         else:
             yield sleep(1)
-    yield client.disconnect()
+    #yield client.disconnect()
 
 
 if __name__ == "__main__":

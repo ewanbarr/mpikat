@@ -28,7 +28,7 @@ import base64
 import cPickle
 import numpy as np
 from copy import deepcopy
-from tornado.gen import coroutine, Return
+from tornado.gen import coroutine, Return, sleep
 from tornado.locks import Event
 from katcp import Sensor, Message, KATCPClientResource
 from katpoint import Target, Antenna
@@ -929,7 +929,7 @@ class FbfProductController(object):
             except Interrupt:
                 self.log.warning("Interrupting callback waiting on 'track' state")
             except Exception as error:
-                log.error(
+                log.exception(
                     "Unknown error while waiting on telescope to enter 'track' state: {}".format(
                         str(error)))
             else:

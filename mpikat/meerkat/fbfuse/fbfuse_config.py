@@ -74,7 +74,7 @@ class FbfConfigurationManager(object):
         else:
             scale = 1.0
         print(scale)
-        nbeams = int(864.0*(64.0/self.nchans_per_worker) / scale)
+        nbeams = int(864.0 * (64.0/self.nchans_per_worker) * (64.0/nantennas) / scale)
         nbeams -= nbeams%32
         return nbeams
 

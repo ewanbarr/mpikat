@@ -23,10 +23,11 @@ import logging
 from math import floor, ceil
 from mpikat.core.utils import next_power_of_two, lcm, next_multiple
 
-log = logging.getLogger('mpikat.fbfuse_config_manager')
+log = logging.getLogger('')
+
 
 FBF_BEAM_NBITS = 8
-MAX_OUTPUT_RATE = 300.0e9 # bits/s -- This is an artifical limit based on the original FBF design
+MAX_OUTPUT_RATE = 220.0e9 # bits/s -- This is an artifical limit based on the original FBF design
 MAX_OUTPUT_RATE_PER_WORKER = 7.0e9 # bits/s
 MAX_OUTPUT_RATE_PER_MCAST_GROUP = 7.0e9 # bits/s
 MIN_MCAST_GROUPS = 32
@@ -73,8 +74,7 @@ class FbfConfigurationManager(object):
             scale = 1.0 + 1.0 / scrunch
         else:
             scale = 1.0
-        print(scale)
-        nbeams = int(864.0 * (64.0/self.nchans_per_worker) * (64.0/nantennas) / scale)
+        nbeams = int(864.0 * (self.total_nchans / (self.nchans_per_worker * 64.0)) * (64.0/nantennas) / scale)
         nbeams -= nbeams%32
         return nbeams
 
@@ -225,12 +225,12 @@ class FbfConfigurationManager(object):
         log.info("Total number of multicast groups required: {}".format(num_mcast_required))
 
         while (num_mcast_required < MIN_MCAST_GROUPS):
-            log.debug("Too few multicast groups used, trying fewer beams per group")
+            #log.debug("Too few multicast groups used, trying fewer beams per group")
             max_valid_nbeam_per_mcast_idx -= 1
             max_valid_nbeam_per_mcast = valid_nbeam_per_mcast[max_valid_nbeam_per_mcast_idx]
-            log.debug("Testing {} beams per group".format(max_valid_nbeam_per_mcast))
+            #log.debug("Testing {} beams per group".format(max_valid_nbeam_per_mcast))
             num_mcast_required = int(ceil(nbeams_after_mcast_limit / max_valid_nbeam_per_mcast))
-            log.debug("{} groups required".format(num_mcast_required))
+            #log.debug("{} groups required".format(num_mcast_required))
 
         # Final check should be over the number of beams
         log.info("Finding common multiples for the total beam and beam per multicast granularity")

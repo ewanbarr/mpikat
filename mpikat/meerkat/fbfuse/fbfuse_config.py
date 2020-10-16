@@ -70,10 +70,11 @@ class FbfConfigurationManager(object):
         #TODO replace with look up table
         scrunch = tscrunch * fscrunch
         if (scrunch) < 8:
-            scale = 1.0/scrunch
+            scale = 1.0 + 1.0 / scrunch
         else:
             scale = 1.0
-        nbeams = int(700*(self.nchans_per_worker/float(nantennas)) * scale) * 4
+        print(scale)
+        nbeams = int(864.0*(64.0/self.nchans_per_worker) / scale)
         nbeams -= nbeams%32
         return nbeams
 

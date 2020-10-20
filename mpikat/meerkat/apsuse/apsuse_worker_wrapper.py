@@ -21,10 +21,24 @@ SOFTWARE.
 """
 
 import logging
-from katcp import KATCPClientResource
-from mpikat.core.worker_pool import WorkerPool, WorkerWrapper
+import json
+from tornado.gen import coroutine
+from mpikat.core.worker_pool import WorkerPool, WorkerWrapper, WorkerRequestError
 
 log = logging.getLogger("mpikat.apsuse_worker_wrapper")
+
+
+HOST_PRIORITIES = {
+    "apscn00.mpifr-be.mkat.karoo.kat.ac.za": 1,
+    "apscn01.mpifr-be.mkat.karoo.kat.ac.za": 2,
+    "apscn02.mpifr-be.mkat.karoo.kat.ac.za": 3,
+    "apscn03.mpifr-be.mkat.karoo.kat.ac.za": 4,
+    "apscn04.mpifr-be.mkat.karoo.kat.ac.za": 5,
+    "apscn05.mpifr-be.mkat.karoo.kat.ac.za": 6,
+    "apscn06.mpifr-be.mkat.karoo.kat.ac.za": 7,
+    "apscn07.mpifr-be.mkat.karoo.kat.ac.za": 8
+}
+
 
 class ApsWorkerWrapper(WorkerWrapper):
     """Wrapper around a client to an ApsWorkerServer
@@ -38,6 +52,34 @@ class ApsWorkerWrapper(WorkerWrapper):
         @params port     The port number that the worker server serves on
         """
         super(ApsWorkerWrapper, self).__init__(hostname, port)
+        self.priority = HOST_PRIORITIES.get(hostname, 0)
+
+    @coroutine
+    def _make_request(self, req, *args, **kwargs):
+        response = yield req(*args, **kwargs)
+        if not response.reply.reply_ok():
+            raise WorkerRequestError(response.reply.arguments[1])
+
+    @coroutine
+    def configure(self, config_dict):
+        yield self._make_request(
+            self._client.req.configure,
+            json.dumps(config_dict),
+            timeout=120.0)
+
+    @coroutine
+    def deconfigure(self):
+        yield self._make_request(self._client.req.deconfigure, timeout=60.0)
+
+    @coroutine
+    def enable_writers(self, beam_dict, output_dir):
+        yield self._make_request(self._client.req.target_start,
+            json.dumps(beam_dict), output_dir)
+
+    @coroutine
+    def disable_writers(self):
+        yield self._make_request(self._client.req.target_stop)
+
 
 class ApsWorkerPool(WorkerPool):
     def make_wrapper(self, hostname, port):

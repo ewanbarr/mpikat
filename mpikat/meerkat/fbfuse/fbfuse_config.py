@@ -23,16 +23,18 @@ import logging
 from math import floor, ceil
 from mpikat.core.utils import next_power_of_two, lcm, next_multiple
 
-log = logging.getLogger('mpikat.fbfuse_config_manager')
+log = logging.getLogger('mpikat.fbfuse_config')
+
 
 FBF_BEAM_NBITS = 8
-MAX_OUTPUT_RATE = 300.0e9 # bits/s -- This is an artifical limit based on the original FBF design
+MAX_OUTPUT_RATE = 220.0e9 # bits/s -- This is an artifical limit based on the original FBF design
 MAX_OUTPUT_RATE_PER_WORKER = 7.0e9 # bits/s
 MAX_OUTPUT_RATE_PER_MCAST_GROUP = 7.0e9 # bits/s
-MIN_MCAST_GROUPS = 16
-MIN_NBEAMS = 16
+MIN_MCAST_GROUPS = 32
+MIN_NBEAMS = 32
 MIN_ANTENNAS = 4
 NBEAM_GRANULARITY = 32
+
 
 class FbfConfigurationError(Exception):
     pass
@@ -40,11 +42,6 @@ class FbfConfigurationError(Exception):
 
 class FbfConfigurationManager(object):
     def __init__(self, total_nantennas, total_bandwidth, total_nchans, nworkers, nips):
-        if total_nchans != 4096:
-            log.warning("A channel mode other than 4k has been requested"
-                        ", but as a hack we are pretending it is 4k")
-            total_nchans = 4096
-            #raise NotImplementedError("Currently only 4k channel mode supported")
         self.total_nantennas = total_nantennas
         self.total_bandwidth = total_bandwidth
         self.total_nchans = total_nchans
@@ -75,10 +72,10 @@ class FbfConfigurationManager(object):
         #TODO replace with look up table
         scrunch = tscrunch * fscrunch
         if (scrunch) < 8:
-            scale = 1.0/scrunch
+            scale = 1.0 + 1.0 / scrunch
         else:
             scale = 1.0
-        nbeams = int(700*(self.nchans_per_worker/float(nantennas)) * scale)
+        nbeams = int(864.0 * (self.total_nchans / (self.nchans_per_worker * 64.0)) * (64.0 / nantennas) / scale)
         nbeams -= nbeams%32
         return nbeams
 
@@ -222,19 +219,23 @@ class FbfConfigurationManager(object):
         max_valid_nbeam_per_mcast_idx = len(valid_nbeam_per_mcast)-1
         log.info("Max valid numbers of beams per multicast group: {}".format(max_valid_nbeam_per_mcast))
 
-        num_mcast_required_per_worker_set = int(floor(num_beams_per_worker_set / float(max_valid_nbeam_per_mcast)))
+        num_mcast_required_per_worker_set = int(
+            floor(
+                num_beams_per_worker_set / float(
+                    max_valid_nbeam_per_mcast
+                    )))
         log.info("Number of multicast groups required per worker set: {}".format(num_mcast_required_per_worker_set))
 
         num_mcast_required = num_mcast_required_per_worker_set * num_worker_sets_to_be_used
         log.info("Total number of multicast groups required: {}".format(num_mcast_required))
 
         while (num_mcast_required < MIN_MCAST_GROUPS):
-            log.debug("Too few multicast groups used, trying fewer beams per group")
+            #log.debug("Too few multicast groups used, trying fewer beams per group")
             max_valid_nbeam_per_mcast_idx -= 1
             max_valid_nbeam_per_mcast = valid_nbeam_per_mcast[max_valid_nbeam_per_mcast_idx]
-            log.debug("Testing {} beams per group".format(max_valid_nbeam_per_mcast))
+            #log.debug("Testing {} beams per group".format(max_valid_nbeam_per_mcast))
             num_mcast_required = int(ceil(nbeams_after_mcast_limit / max_valid_nbeam_per_mcast))
-            log.debug("{} groups required".format(num_mcast_required))
+            #log.debug("{} groups required".format(num_mcast_required))
 
         # Final check should be over the number of beams
         log.info("Finding common multiples for the total beam and beam per multicast granularity")
@@ -242,20 +243,20 @@ class FbfConfigurationManager(object):
         final_nbeams = next_multiple(group_corrected_nbeams, lcm(
             NBEAM_GRANULARITY, max_valid_nbeam_per_mcast))
         final_num_mcast = final_nbeams // max_valid_nbeam_per_mcast
-        if final_nbeams % num_worker_sets_to_be_used !=0:
+        if final_nbeams % num_worker_sets_to_be_used != 0:
             raise Exception(
                 "Error during configuration, expected number of "
                 "beams ({}) to be a multiple of number of worker sets ({})".format(
                     final_nbeams, num_worker_sets_to_be_used))
         num_beams_per_worker_set = final_nbeams / num_worker_sets_to_be_used
         config = {
-            "num_beams":final_nbeams,
-            "num_chans":nchans,
-            "num_mcast_groups":final_num_mcast,
-            "num_beams_per_mcast_group":max_valid_nbeam_per_mcast,
-            "num_workers_per_set":min_num_workers,
-            "num_worker_sets":num_worker_sets_to_be_used,
-            "num_workers_total":num_worker_sets_to_be_used*min_num_workers,
+            "num_beams": final_nbeams,
+            "num_chans": nchans,
+            "num_mcast_groups": final_num_mcast,
+            "num_beams_per_mcast_group": max_valid_nbeam_per_mcast,
+            "num_workers_per_set": min_num_workers,
+            "num_worker_sets": num_worker_sets_to_be_used,
+            "num_workers_total": num_worker_sets_to_be_used*min_num_workers,
             "num_beams_per_worker_set": num_beams_per_worker_set,
             "data_rate_per_group": rate_per_beam * max_valid_nbeam_per_mcast,
             "used_bandwidth": bandwidth

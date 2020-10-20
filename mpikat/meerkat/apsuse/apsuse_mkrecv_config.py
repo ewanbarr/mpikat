@@ -3,7 +3,7 @@ import logging
 import time
 from collections import deque
 
-log = logging.getLogger('mpikat.fbfuse_mksend_config')
+log = logging.getLogger('mpikat.apsuse_mkrecv_config')
 
 HEADER_TEMPLATE = """
 HEADER        DADA
@@ -12,6 +12,14 @@ HDR_SIZE      4096
 DADA_VERSION  1.0
 DADA_KEY      {{dada_key}}
 DADA_MODE     {{dada_mode}}
+
+BW            {{bandwidth}}
+FREQ          {{centre_frequency}}
+NCHAN         {{nchannels}}
+NBIT          8
+TSAMP         {{sampling_interval}}
+SOURCE        not_a_source
+
 SYNC_TIME     {{sync_epoch}}
 SAMPLE_CLOCK  {{sample_clock}}
 MCAST_SOURCES {{mcast_sources}}
@@ -20,14 +28,13 @@ IBV_IF        {{interface}}
 IBV_VECTOR    -1
 IBV_MAX_POLL  10
 BUFFER_SIZE   33554432
-PACKET_SIZE   1500
+PACKET_SIZE   9000
 SAMPLE_CLOCK_START unset
-NTHREADS      5
+NTHREADS      {{nthreads}}
 NHEAPS        64
-NGROUPS_DATA  {{ngroups_data}}
-HEAP_NBYTES   {{heap_size}}
-DADA_NSLOTS   3
-SLOTS_SKIP    8
+HEAP_NBYTES     {{heap_size}}
+DADA_NSLOTS 4
+SLOTS_SKIP 8
 
 NINDICES    3
 IDX1_ITEM   0
@@ -35,10 +42,10 @@ IDX1_STEP   {{timestamp_step}}
 IDX1_MODULO {{timestamp_modulus}}
 
 IDX2_ITEM   1
-IDX2_LIST   {{ordered_feng_ids_csv}}
+IDX2_LIST   {{beam_ids_csv}}
 
 IDX3_ITEM   2
-IDX3_LIST   {{frequency_partition_ids_csv}}
+IDX3_LIST   {{freq_ids_csv}}
 """
 
 MKRECV_STDOUT_KEYS = {

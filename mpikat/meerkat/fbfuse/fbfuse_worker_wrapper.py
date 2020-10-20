@@ -22,7 +22,6 @@ SOFTWARE.
 
 import logging
 from tornado.gen import coroutine, Return
-from katcp import KATCPClientResource
 from mpikat.core.worker_pool import WorkerPool, WorkerWrapper, WorkerRequestError
 
 log = logging.getLogger("mpikat.fbfuse_worker_wrapper")
@@ -47,6 +46,7 @@ class FbfWorkerWrapper(WorkerWrapper):
         response = yield req(*args, **kwargs)
         if not response.reply.reply_ok():
             raise WorkerRequestError(response.reply.arguments[1])
+        raise Return(response)
 
     @coroutine
     def prepare(self, *args, **kwargs):
@@ -67,6 +67,22 @@ class FbfWorkerWrapper(WorkerWrapper):
     @coroutine
     def set_levels(self, *args, **kwargs):
         yield self._make_request(self._client.req.set_levels, *args, **kwargs)
+
+    @coroutine
+    def rescale(self, *args, **kwargs):
+        yield self._make_request(self._client.req.rescale, *args, **kwargs)
+
+    @coroutine
+    def trigger_tb_dump(self, *args, **kwargs):
+        yield self._make_request(self._client.req.trigger_tb_dump, *args, **kwargs)
+
+    @coroutine
+    def reset_complex_gains(self, *args, **kwargs):
+        yield self._make_request(self._client.req.reset_complex_gains, *args, **kwargs)
+
+    @coroutine
+    def set_complex_gains(self, *args, **kwargs):
+        yield self._make_request(self._client.req.set_complex_gains, *args, **kwargs)
 
 
 class FbfWorkerPool(WorkerPool):

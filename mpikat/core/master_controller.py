@@ -22,6 +22,7 @@ SOFTWARE.
 import logging
 import json
 from tornado.ioloop import PeriodicCallback
+from tornado.gen import coroutine, Return
 from katcp import Sensor, AsyncDeviceServer
 from katcp.kattypes import request, return_reply, Int, Str
 from mpikat.core.utils import check_ntp_sync
@@ -216,6 +217,27 @@ class MasterController(AsyncDeviceServer):
             req.inform("{} free".format(server))
         return ("ok", len(self._server_pool.used()) + len(
             self._server_pool.available()))
+
+    @request(Str())
+    @return_reply()
+    @coroutine
+    def request_reset_workers(self, req, product_id):
+        """
+        @brief   List all used and available worker servers and
+                 provide minimal metadata
+        """
+        try:
+            product = self._get_product(product_id)
+        except Exception as error:
+            log.exception("Could not reset workers with error: {}".format(str(error)))
+            raise Return(("fail", str(error)))
+        try:
+            yield product.reset_workers()
+        except Exception as error:
+            log.exception("Could not reset workers with error: {}".format(str(error)))
+            raise Return(("fail", str(error)))
+        else:
+            raise Return(("ok",))
 
     @request()
     @return_reply(Int())

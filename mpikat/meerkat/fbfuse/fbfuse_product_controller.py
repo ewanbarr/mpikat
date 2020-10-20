@@ -25,20 +25,59 @@ import json
 import time
 import struct
 import base64
+import cPickle
+import numpy as np
 from copy import deepcopy
-from tornado.gen import coroutine, Return
+from tornado.gen import coroutine, Return, sleep
+from tornado.locks import Event
 from katcp import Sensor, Message, KATCPClientResource
 from katpoint import Target, Antenna
 from mpikat.core.ip_manager import ip_range_from_stream
 from mpikat.core.utils import parse_csv_antennas, LoggingSensor
+from mpikat.meerkat.katportalclient_wrapper import Interrupt
 from mpikat.meerkat.fbfuse import (
     BeamManager,
+    BeamAllocationError,
     DelayConfigurationServer,
     FbfConfigurationManager)
+from mpikat.meerkat.katportalclient_wrapper import SubarrayActivity, simple_activity_wait
 
 N_FENG_STREAMS_PER_WORKER = 4
 COH_ANTENNA_GRANULARITY = 4
-
+HOST_SORTING_ORDER = [
+    "fbfpn00.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn01.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn02.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn03.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn04.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn05.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn06.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn07.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn08.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn09.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn10.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn11.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn12.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn13.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn14.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn15.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn16.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn17.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn18.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn19.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn32.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn21.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn22.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn23.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn24.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn25.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn26.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn27.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn28.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn29.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn30.mpifr-be.mkat.karoo.kat.ac.za",
+    "fbfpn31.mpifr-be.mkat.karoo.kat.ac.za"
+]
 log = logging.getLogger("mpikat.fbfuse_product_controller")
 
 
@@ -59,7 +98,8 @@ class FbfProductController(object):
     IDLE, PREPARING, READY, STARTING, CAPTURING, STOPPING, ERROR = STATES
 
     def __init__(self, parent, product_id, katpoint_antennas,
-                 n_channels, feng_streams, proxy_name, feng_config):
+                 n_channels, feng_streams, proxy_name, feng_config,
+                 kpc_url, kpc_wrapper_type):
         """
         @brief      Construct new instance
 
@@ -76,8 +116,6 @@ class FbfProductController(object):
 
         @param      proxy_name        The name of the proxy associated with this subarray (used as a sensor prefix)
 
-        #NEED FENG CONFIG
-
         @param      servers           A list of FbfWorkerServer instances allocated to this product controller
         """
         self.log = logging.getLogger(
@@ -89,7 +127,11 @@ class FbfProductController(object):
         self._product_id = product_id
         self._antennas = ",".join([a.name for a in katpoint_antennas])
         self._katpoint_antennas = katpoint_antennas
-        self._antenna_map = {a.name: a for a in self._katpoint_antennas}
+        self._antenna_map = {}
+        self._antenna_weights = {}
+        for antenna in self._katpoint_antennas:
+            self._antenna_map[antenna.name] = antenna
+            self._antenna_weights[antenna.name] = np.ones(n_channels)
         self._n_channels = n_channels
         self._streams = ip_range_from_stream(feng_streams)
         self._proxy_name = proxy_name
@@ -98,6 +140,10 @@ class FbfProductController(object):
         self._beam_manager = None
         self._delay_config_server = None
         self._ca_client = None
+        self._kpc_url = kpc_url
+        self._activity_tracker_interrupt = Event()
+        #self._activity_tracker = SubarrayActivity(self._kpc_url)
+        self._katportal_wrapper_type = kpc_wrapper_type
         self._previous_sb_config = None
         self._managed_sensors = []
         self._beam_sensors = []
@@ -331,6 +377,23 @@ class FbfProductController(object):
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._cbc_idx1_step_sensor)
 
+        self._cbc_data_suspect = Sensor.boolean(
+            "coherent-beam-data-suspect",
+            description="Indicates when data from the coherent beam is expected to be invalid",
+            default=True,
+            initial_status=Sensor.NOMINAL)
+        self.add_sensor(self._cbc_data_suspect)
+
+        self._cbc_beam_shape = Sensor.string(
+            "coherent-beam-shape",
+            description=("JSON description of the tied array beam shape as an ellipse."
+                         " The 'x' and 'y' parameters specify the length of the axes in"
+                         " degrees and the 'angle' gives the orientation of the 'x' axis "
+                         "with respect to the east of the image plane in degrees"),
+            default="",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._cbc_beam_shape)
+
         self._ibc_nbeams_sensor = Sensor.integer(
             "incoherent-beam-count",
             description="The number of incoherent beams that this FBF instance can currently produce",
@@ -411,6 +474,13 @@ class FbfProductController(object):
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._ibc_idx1_step_sensor)
 
+        self._ibc_data_suspect = Sensor.boolean(
+            "incoherent-beam-data-suspect",
+            description="Indicates when data from the incoherent beam is expected to be invalid",
+            default=True,
+            initial_status=Sensor.NOMINAL)
+        self.add_sensor(self._ibc_data_suspect)
+
         self._servers_sensor = Sensor.string(
             "servers",
             description="The worker server instances currently allocated to this product",
@@ -446,6 +516,21 @@ class FbfProductController(object):
             default="",
             initial_status=Sensor.UNKNOWN)
         self.add_sensor(self._psf_png_sensor)
+
+        self._ca_target_request_sensor = Sensor.string(
+            "ca-target-request",
+            description="The last target request information received from the CA",
+            default="",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._ca_target_request_sensor)
+
+        self._ca_sb_config_request_sensor = Sensor.string(
+            "ca-sb-config-request",
+            description="The last SB config request information received from the CA",
+            default="",
+            initial_status=Sensor.UNKNOWN)
+        self.add_sensor(self._ca_sb_config_request_sensor)
+
         self._parent.mass_inform(Message.inform('interface-changed'))
 
     def teardown_sensors(self):
@@ -535,6 +620,23 @@ class FbfProductController(object):
         self._ca_address_sensor.set_value("{}:{}".format(hostname, port))
 
     @coroutine
+    def reset_workers(self, timeout=60.0):
+        for server in self._servers:
+            try:
+                yield server.reset()
+            except Exception as error:
+                log.exception("Could not reset worker '{}' with error: {}".format(
+                    str(server), str(error)))
+        start = time.time()
+        while time.time() < start + timeout:
+            if all([server.is_connected() for server in self._servers]):
+                raise Return()
+            else:
+                yield sleep(1)
+        log.warning("Not all servers reset within {} second timeout".format(
+            timeout))
+
+    @coroutine
     def get_sb_configuration(self, sb_id):
         if self._ca_client:
             config = yield self.get_ca_sb_configuration(sb_id)
@@ -549,14 +651,16 @@ class FbfProductController(object):
     def get_ca_sb_configuration(self, sb_id):
         self.log.debug(("Retrieving schedule block configuration"
                         " from configuration authority"))
-        yield self._ca_client.until_synced()
+        yield self._ca_client.until_synced(timeout=30.0)
         try:
-            response = yield self._ca_client.req.get_schedule_block_configuration(self._proxy_name, sb_id)
+            response = yield self._ca_client.req.get_schedule_block_configuration(self._product_id, sb_id, self._n_channels, timeout=40.0)
         except Exception as error:
             self.log.error(
                 "Request for SB configuration to CA failed with error: {}".format(str(error)))
             raise error
         try:
+            self.log.debug(response.reply.arguments[1])
+            self._ca_sb_config_request_sensor.set_value(response.reply.arguments[1])
             config_dict = json.loads(response.reply.arguments[1])
         except Exception as error:
             self.log.error(
@@ -586,6 +690,7 @@ class FbfProductController(object):
                 log.exception(
                     "Unable to deconfigure server {}: {}".format(
                         self._servers[ii], str(error)))
+        yield self.reset_workers()
         self._parent._server_pool.deallocate(self._servers)
         self._servers = []
         if self._ibc_mcast_group:
@@ -635,15 +740,17 @@ class FbfProductController(object):
                 "Dropping antennas {} from the coherent beam".format(
                     antennas[-remainder:])
                 )
-            antennas = ",".join(antennas[:len(antennas) - remainder])
+            antennas = antennas[:len(antennas) - remainder]
         if len(antennas) == 0:
             raise Exception("After sanitising coherent beam antennas, "
                             "no valid antennas remain")
+        log.info("Sanitised coherent antennas: {}".format(antennas))
         return ",".join(antennas)
 
     def _sanitise_incoh_beam_ants(self, requested_antennas):
         antennas = self._get_valid_antennas(
             parse_csv_antennas(requested_antennas))
+        log.info("Sanitised incoherent antennas: {}".format(antennas))
         return ",".join(antennas)
 
     @coroutine
@@ -745,7 +852,7 @@ class FbfProductController(object):
         # Below are some convenience calculations
         coh_heap_size = 8192
         nsamps_per_coh_heap = (coh_heap_size / (cm.nchans_per_worker
-                               * config['coherent-beams-fscrunch']))
+                               / config['coherent-beams-fscrunch']))
         coh_timestamp_step = (config['coherent-beams-tscrunch']
                               * nsamps_per_coh_heap
                               * 2 * self._n_channels)
@@ -760,7 +867,7 @@ class FbfProductController(object):
 
         incoh_heap_size = 8192
         nsamps_per_incoh_heap = (incoh_heap_size / (cm.nchans_per_worker
-                                 * config['incoherent-beam-fscrunch']))
+                                 / config['incoherent-beam-fscrunch']))
         incoh_timestamp_step = (config['incoherent-beam-tscrunch']
                                 * nsamps_per_incoh_heap
                                 * 2 * self._n_channels)
@@ -780,8 +887,11 @@ class FbfProductController(object):
         self._ibc_mcast_group_data_rate_sensor.set_value(ibc_group_rate)
         self._servers = self._parent._server_pool.allocate(
             min(nworkers_available, mcast_config['num_workers_total']))
+        #self._servers = sorted(
+        #    self._servers, key=lambda server: server.hostname)
         self._servers = sorted(
-            self._servers, key=lambda server: server.hostname)
+            self._servers, key=lambda server: HOST_SORTING_ORDER.index(server.hostname))
+
         server_str = ",".join(["{s.hostname}:{s.port}".format(
             s=server) for server in self._servers])
         self._servers_sensor.set_value(server_str)
@@ -797,28 +907,100 @@ class FbfProductController(object):
 
     @coroutine
     def get_ca_target_configuration(self, boresight_target):
+
+        # This should all now be a delayed callaback
+
+        # Flow here is
+        # 1. target-start received
+        # 2. set all suspect flags to true
+        # 3. talk to the CA
+        # 4. wait for being on target
+        # 5. phase up
+        # 6. rescale
+        # 7. wait ~2 seconds
+        # 8. set all suspect flags to false
+
+        # How to handle mutliple target-starts in quick succession?
+        # Can override with the interrupt
+
+        @coroutine
+        def wait_for_track():
+            # Here we interrupt any active wait_for_track coroutines
+            self._activity_tracker_interrupt.set()
+            yield sleep(1)
+            self._activity_tracker_interrupt.clear()
+            self.log.debug("Waiting for subarray to enter 'track' state")
+            try:
+                yield simple_activity_wait(
+                    self._kpc_url, "track",
+                    self._activity_tracker_interrupt)
+            except Interrupt:
+                self.log.warning("Interrupting callback waiting on 'track' state")
+            except Exception as error:
+                log.exception(
+                    "Unknown error while waiting on telescope to enter 'track' state: {}".format(
+                        str(error)))
+            else:
+                try:
+                    yield self.rescale()
+                    yield sleep(2)
+                    # Set suspect flags all to true
+                    self._ibc_data_suspect.set_value(False)
+                    self._cbc_data_suspect.set_value(False)
+                except Exception as error:
+                    log.error("Error during phase-up/rescale process: {}".format(
+                        str(error)))
+                    log.warning("Data suspect flags will remain in True state")
+
         def ca_target_update_callback(received_timestamp, timestamp, status,
                                       value):
             # TODO, should we really reset all the beams or should we have
             # a mechanism to only update changed beams
             config_dict = json.loads(value)
+            self._ibc_data_suspect.set_value(True)
+            self._cbc_data_suspect.set_value(True)
             self.reset_beams()
             for target_string in config_dict.get('beams', []):
                 target = Target(target_string)
-                self.add_beam(target)
+                try:
+                    self.add_beam(target)
+                except BeamAllocationError as error:
+                    log.warning(str(error))
             for tiling in config_dict.get('tilings', []):
-                target = Target(tiling['target'])  # required
-                freq = float(tiling.get('reference_frequency',
-                                        self._cfreq_sensor.value()))
+                # Update to default if no value
+                tiling['reference_frequency'] = tiling.get('reference_frequency', self._cfreq_sensor.value())
+                tiling['overlap'] = tiling.get('overlap', 0.5)
+                tiling['epoch'] = tiling.get('epoch', time.time())
+                # Parse values
+                target = Target(tiling['target'])
+                freq = float(tiling['reference_frequency'])
                 nbeams = int(tiling['nbeams'])
-                overlap = float(tiling.get('overlap', 0.5))
-                epoch = float(tiling.get('epoch', time.time()))
+                overlap = float(tiling['overlap'])
+                epoch = float(tiling['epoch'])
                 self.add_tiling(target, nbeams, freq, overlap, epoch)
-        # Here we generate a plot from the PSF
-        yield self._ca_client.until_synced()
+            self._ca_target_request_sensor.set_value(json.dumps(config_dict))
+            self._parent.ioloop.add_callback(wait_for_track)
+
+        # Set suspect flags all to true
+        self._ibc_data_suspect.set_value(True)
+        self._cbc_data_suspect.set_value(True)
+
+        try:
+            yield self.apply_telstate_complex_gains()
+        except Exception as error:
+            log.error("Phase up failed with error: {}".format(str(error)))
+            log.warning("Continuing without phase-up")
+
+        # Here we communicate the new target
+        # to the CA to allow for an update
+        # of the target configuration sensor
+        yield self._ca_client.until_synced(timeout=10.0)
+        sensor_name = "{}_beam_position_configuration".format(self._product_id)
+        if sensor_name in self._ca_client.sensor:
+            self._ca_client.sensor[sensor_name].clear_listeners()
         try:
             response = yield self._ca_client.req.target_configuration_start(
-                self._proxy_name, boresight_target.format_katcp())
+                self._product_id, boresight_target.format_katcp())
         except Exception as error:
             self.log.error(("Request for target configuration to CA "
                             "failed with error: {}").format(str(error)))
@@ -828,12 +1010,18 @@ class FbfProductController(object):
             self.log.error(("Request for target configuration to CA "
                             "failed with error: {}").format(str(error)))
             raise error
-        yield self._ca_client.until_synced()
-        sensor = self._ca_client.sensor[
-            "{}_beam_position_configuration".format(self._proxy_name)]
-        sensor.clear_listeners()
+        yield self._ca_client.until_synced(timeout=10.0)
+        sensor = self._ca_client.sensor[sensor_name]
         sensor.register_listener(ca_target_update_callback)
         self._ca_client.set_sampling_strategy(sensor.name, "event")
+
+        # previously we set a second wait here for the IB
+        # this doesn't make sense any more due to the scaling
+        # issues we have. As such the IB and CB flags should
+        # always be the same.
+        # Here we are relying on a an update to the
+        # beam_position_configuration sensor to trigger
+        # the pull for the right setup. This means we always need a CA...
 
     def _beam_to_sensor_string(self, beam):
         return beam.target.format_katcp()
@@ -869,34 +1057,126 @@ class FbfProductController(object):
             self.add_sensor(sensor)
         self._parent.mass_inform(Message.inform('interface-changed'))
 
+    @coroutine
     def _make_beam_plot(self, target):
-        png = self._beam_manager.generate_psf_png(
-            target, self._katpoint_antennas,
-            self._cfreq_sensor.value(), time.time())
-        self._psf_png_sensor.set_value(base64.b64encode(png))
+        try:
+            png = self._beam_manager.generate_psf_png(
+                target,
+                self._cfreq_sensor.value(), time.time())
+            self._psf_png_sensor.set_value(base64.b64encode(png))
+        except Exception as error:
+            log.exception("Unable to generate beamshape image: {}".format(
+                error))
 
     @coroutine
     def target_start(self, target):
         self._phase_reference_sensor.set_value(target.format_katcp())
         self._delay_config_server._phase_reference_sensor.set_value(
             target.format_katcp())
-        try:
-            self._make_beam_plot(target)
-        except Exception as error:
-            log.exception("Unable to generate beamshape image: {}".format(
-                error))
+        self._parent.ioloop.add_callback(self._make_beam_plot, target)
         if self._ca_client:
-            yield self.get_ca_target_configuration(target)
+            self._parent.ioloop.add_callback(
+                self.get_ca_target_configuration, target)
         else:
-            self.log.warning("No configuration authority is set, "
-                             "using default beam configuration")
+            self.log.error("No configuration authority is set")
 
     @coroutine
-    def target_stop(self):
-        if self._ca_client:
-            sensor_name = "{}_beam_position_configuration".format(
-                self._proxy_name)
-            self._ca_client.set_sampling_strategy(sensor_name, "none")
+    def rescale(self):
+        if not self.capturing:
+            raise FbfProductStateError([self.CAPTURING], self.state)
+        futures = []
+        for server in self._servers:
+            futures.append(server.rescale())
+        for ii, future in enumerate(futures):
+            try:
+                yield future
+            except Exception as error:
+                log.exception(
+                    "Error when triggering rescale on server {}: {}".format(
+                        self._servers[ii], str(error)))
+
+    @coroutine
+    def trigger_tb_dump(self, utc_start, width, dm, ref_freq, trigger_id):
+        if not self.capturing:
+            raise FbfProductStateError([self.CAPTURING], self.state)
+        futures = []
+        for server in self._servers:
+            futures.append(server.trigger_tb_dump(utc_start, width, dm, ref_freq, trigger_id))
+        for ii, future in enumerate(futures):
+            try:
+                yield future
+            except Exception as error:
+                log.exception(
+                    "Error running TB dump on server {}: {}".format(
+                        self._servers[ii], str(error)))
+
+    @coroutine
+    def apply_telstate_complex_gains(self):
+        if not self.capturing:
+            raise FbfProductStateError([self.CAPTURING], self.state)
+        # first get complex gains
+        self.log.info("Fetching latest complex gains from telstate")
+        kpc = self._katportal_wrapper_type(self._kpc_url)
+        gains = yield kpc.get_gains()
+        self.log.info("Received gains for the following inputs: {}".format(
+            sorted(gains.keys())))
+        futures = []
+
+        self.log.debug("Current _servers: {}".format(str(self._servers)))
+        self.log.debug("Current _server_configs: {}".format(str(self._server_configs)))
+
+        for server in self._server_configs.keys():
+            try:
+                idx = self._server_configs[server][2]
+                step = 4 * self._server_configs[server][1]
+                server_gains = {}
+                # keys here include h and v so we strip those
+                for key, g_array in gains.items():
+                    antenna = key.rstrip("vh")
+                    scalar_weights = self._antenna_weights[antenna][idx: (idx+step)]
+                    server_gains[key] = (scalar_weights * g_array[idx: (idx+step)]).astype("complex64")
+                self.log.debug("Selecting gains for channels {}:{} for {}".format(
+                    idx, idx+ step, server))
+                futures.append(server.set_complex_gains(
+                    cPickle.dumps(server_gains, 1), timeout=30.0))
+            except Exception as error:
+                self.log.exception("Failed to dispatch set gain request for node {}".format(str(server)))
+        for ii, future in enumerate(futures):
+            try:
+                yield future
+            except Exception as error:
+                log.exception(
+                    "Error when setting telstate gains on server {}: {}".format(
+                        self._servers[ii], str(error)))
+	yield self.rescale()
+
+
+
+    @coroutine
+    def apply_default_complex_gains(self):
+        if not self.capturing:
+            raise FbfProductStateError([self.CAPTURING], self.state)
+        self.log.info("Setting complex gains to 1.0 (scalar antenna weights are preserved)")
+        futures = []
+        for server in self._server_configs.keys():
+            idx = self._server_configs[server][2]
+            step = 4 * self._server_configs[server][1]
+            server_gains = {}
+            for antenna in self._antenna_weights.keys():
+                scalar_weights = self._antenna_weights[antenna][idx: (idx+step)]
+                for pol in ["v", "h"]:
+                    server_gains[antenna + pol] = scalar_weights.astype("complex64")
+            self.log.debug("Selecting gains for channels {}:{} for {}".format(
+                idx * step, (idx+1) * step, server))
+            futures.append(server.set_complex_gains(
+                cPickle.dumps(server_gains, 1), timeout=30.0))
+        for ii, future in enumerate(futures):
+            try:
+                yield future
+            except Exception as error:
+                log.exception(
+                    "Error when setting telstate gains on server {}: {}".format(
+                        self._servers[ii], str(error)))
 
     @coroutine
     def prepare(self, sb_id):
@@ -909,6 +1189,7 @@ class FbfProductController(object):
         self.log.info("Preparing FBFUSE product")
         self._state_sensor.set_value(self.PREPARING)
         self.log.debug("Product moved to 'preparing' state")
+        self._server_configs = {}
         try:
             sb_config = yield self.get_sb_configuration(sb_id)
         except Exception as error:
@@ -1007,7 +1288,8 @@ class FbfProductController(object):
             group_start = struct.unpack("B", ip_range.base_ip.packed[-1])[0]
             chan0_idx = cm.nchans_per_group * group_start
             chan0_freq = fbottom + chan0_idx * cm.channel_bandwidth
-            future = server.prepare(
+
+            args = (
                 ip_range.format_katcp(),
                 cm.nchans_per_group,
                 chan0_idx,
@@ -1017,8 +1299,9 @@ class FbfProductController(object):
                 json.dumps(coherent_beam_config),
                 json.dumps(incoherent_beam_config),
                 de_ip,
-                de_port,
-                timeout=120.0)
+                de_port)
+            self._server_configs[server] = args
+            future = server.prepare(*args, timeout=120.0)
             prepare_futures.append(future)
 
         failure_count = 0
@@ -1038,6 +1321,8 @@ class FbfProductController(object):
             self._previous_sb_config = sb_config
             self._state_sensor.set_value(self.READY)
             self.log.info("Successfully prepared FBFUSE product")
+        yield self.set_levels(7.0)
+        #yield self._activity_tracker.start()
 
     @coroutine
     def deconfigure(self):
@@ -1058,13 +1343,13 @@ class FbfProductController(object):
         self._state_sensor.set_value(self.IDLE)
 
     @coroutine
-    def set_levels(self, input_level, output_level):
+    def set_levels(self, output_level):
         if not self.ready:
             raise FbfProductStateError([self.READY], self.state)
         futures = []
         for server in self._servers:
             futures.append(server.set_levels(
-                input_level, output_level))
+                output_level))
         for ii, future in enumerate(futures):
             try:
                 yield future
@@ -1081,7 +1366,7 @@ class FbfProductController(object):
         self.log.debug("Product moved to 'starting' state")
         futures = []
         for server in self._servers:
-            futures.append(server.capture_start())
+            futures.append(server.capture_start(timeout=10.0))
         for ii, future in enumerate(futures):
             try:
                 yield future
@@ -1118,6 +1403,15 @@ class FbfProductController(object):
                     "Error when calling capture_stop on server {}: {}".format(
                         self._servers[ii], str(error)))
         self._state_sensor.set_value(self.READY)
+
+    @coroutine
+    def target_stop(self):
+        if self._ca_client:
+            sensor_name = "{}_beam_position_configuration".format(
+                self._product_id)
+            self._ca_client.set_sampling_strategy(sensor_name, "none")
+        self._ibc_data_suspect.set_value(True)
+        self._cbc_data_suspect.set_value(True)
 
     def add_beam(self, target):
         """
@@ -1158,10 +1452,17 @@ class FbfProductController(object):
         tiling = self._beam_manager.add_tiling(
             target, number_of_beams, reference_frequency, overlap)
         try:
-            tiling.generate(self._katpoint_antennas, epoch)
+            tiling.generate(epoch)
         except Exception as error:
             self.log.exception(
-                "Failed to generate tiling pattern with error: {}".format(str(error)))
+                "Failed to generate tiling pattern with error: {}".format(
+                    str(error)))
+        beam_shape = {
+            "x": tiling.beam_shape.axisH,
+            "y": tiling.beam_shape.axisV,
+            "angle": tiling.beam_shape.angle
+        }
+        self._cbc_beam_shape.set_value(json.dumps(beam_shape))
         return tiling
 
     def reset_beams(self):
@@ -1174,3 +1475,34 @@ class FbfProductController(object):
         if self.state not in valid_states:
             raise FbfProductStateError(valid_states, self.state)
         self._beam_manager.reset()
+
+    def set_antenna_weights(self, antenna, weights):
+        """
+        @brief      Sets the antenna weights.
+
+        @param      antenna:  The antenna name to set the weights for
+                              (e.g. m001)
+        @param      weights:  Scalar weights either as a single value
+                              of vector of per channel weights
+
+        @note   These weights are only applied on a complex gain application
+        """
+        if antenna not in self._antenna_weights:
+            msg = "No weights managed for antenna: {}".format(antenna)
+            log.error(msg)
+            raise Exception(msg)
+        if len(weights) not in [1, self._n_channels]:
+            msg = "Unexpected number of channel weights: {}".format(len(weights))
+            log.error(msg)
+            raise Exception(msg)
+        self._antenna_weights[antenna][:] = weights
+
+    def reset_antenna_weights(self):
+        """
+        @brief      Reset all antenna weights to unity
+
+        @note   These weights are only applied on a complex gain application
+        """
+        for antenna in self._antenna_weights.keys():
+            self._antenna_weights[antenna] = np.ones(
+                self._n_channels, dtype="float32")

@@ -23,7 +23,11 @@ import logging
 import json
 import signal
 import os
+import time
 import coloredlogs
+import datetime
+import cPickle
+import numpy as np
 from subprocess import Popen, PIPE, check_call
 from optparse import OptionParser
 from tornado.gen import coroutine
@@ -39,10 +43,16 @@ from mpikat.meerkat.fbfuse.fbfuse_mksend_config import (
     make_mksend_header)
 from mpikat.meerkat.fbfuse.fbfuse_psrdada_cpp_wrapper import (
     compile_psrdada_cpp)
+from mpikat.meerkat.fbfuse.fbfuse_autoscaling_trigger import AutoscalingTrigger
+from mpikat.meerkat.fbfuse.fbfuse_gain_buffer_controller import GainBufferController
 from mpikat.utils.process_tools import process_watcher, ManagedProcess
 from mpikat.utils.db_monitor import DbMonitor
+from mpikat.meerkat.fbfuse.fbfuse_transient_buffer import TransientBuffer
 
 log = logging.getLogger("mpikat.fbfuse_worker_server")
+
+# Set the OMP_NUM_THREADS for faster DADA buffer allocation
+os.environ["OMP_NUM_THREADS"] = "8"
 
 PACKET_PAYLOAD_SIZE = 1024  # bytes
 AVAILABLE_CAPTURE_MEMORY = 137438953472/2  # bytes
@@ -132,11 +142,15 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._dada_incoh_output_key = "baba"
         self._capture_interface = capture_interface
         self._capture_monitor = None
-
-        self._input_level = 10.0
+        self._autoscaling_key = "autoscaling_trigger"
+        self._autoscaling_trigger = AutoscalingTrigger(
+            key=self._autoscaling_key)
         self._output_level = 10.0
         self._partition_bandwidth = None
         self._centre_frequency = None
+        self._transient_buffer = None
+        self._feng_config = None
+        self._tb_params = {}
 
         super(FbfWorkerServer, self).__init__(ip, port)
 
@@ -251,6 +265,14 @@ class FbfWorkerServer(AsyncDeviceServer):
             unit="%")
         self.add_sensor(self._ingress_buffer_percentage)
 
+        self._transient_buffer_percentage = Sensor.float(
+            "transient-buffer-fill-level",
+            description=("The percentage fill level for the transient buffer"),
+            default=0.0,
+            initial_status=Sensor.UNKNOWN,
+            unit="%")
+        self.add_sensor(self._transient_buffer_percentage)
+
         self._cb_egress_buffer_percentage = Sensor.float(
             "cb-egress-buffer-fill-level",
             description=("The percentage fill level for the transmission"
@@ -308,7 +330,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         check_call(cmd)
 
     @coroutine
-    def _make_db(self, key, block_size, nblocks, timeout=120):
+    def _make_db(self, key, block_size, nblocks, nreaders=1, timeout=120):
         try:
             yield self._destroy_db(key, timeout=20)
         except Exception as error:
@@ -318,7 +340,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                    "nblocks={}").format(key, block_size, nblocks))
         if self._exec_mode == FULL:
             cmdline = map(str, ["dada_db", "-k", key, "-b", block_size, "-n",
-                          nblocks, "-l", "-p"])
+                          nblocks, "-l", "-p", "-r", nreaders])
             proc = Popen(cmdline, stdout=PIPE,
                          stderr=PIPE, shell=False,
                          close_fds=True)
@@ -360,22 +382,97 @@ class FbfWorkerServer(AsyncDeviceServer):
         log.debug("Setting affinity for PID {} to {}".format(pid, core_spec))
         os.system("taskset -cp {} {}".format(core_spec, pid))
 
-    @request(Float(), Float())
+    @request(Float())
     @return_reply()
-    def request_set_levels(self, req, input_level, output_level):
+    def request_set_levels(self, req, output_level):
         """
         @brief    Set the input and output levels for FBFUSE
 
         @param      req             A katcp request object
 
-        @param    input_level  The standard deviation of the data
-                               from the F-engines.
-
         @param    output_level  The standard deviation of the data
                                 output from FBFUSE.
         """
-        self._input_level = input_level
         self._output_level = output_level
+        return ("ok",)
+
+    @request()
+    @return_reply()
+    def request_rescale(self, req):
+        """
+        @brief    Request and autoscaling of the FBFUSE channels
+        """
+        try:
+            self._autoscaling_trigger.trigger()
+        except Exception as error:
+            return ("fail", str(error))
+        else:
+            return ("ok",)
+
+    @request()
+    def request_reset(self, req):
+        """
+        @brief    Request the docker container housing this server gets restarted
+
+        @detail   This is an apocalyptic command that will erase the state of the
+                  current instance completely and reset it back to fresh
+        """
+        # First get the docker container ID
+        with open("/proc/self/cgroup", "r") as f:
+            line = f.readline()
+            idx = line.split("/")[-1].strip()
+        req.reply("ok",)
+        os.system("docker restart {}".format(idx))
+
+    @request(Str())
+    @return_reply()
+    def request_set_complex_gains(self, req, gains):
+        """
+        @brief  Set the complex gains to non-unity values
+
+        @detail   This method is used to support commensal FBFUSE operation when
+                  phasing solutions are not applied to the telescope.
+
+        @param   packed_gains_npy  The gain array in AFP order as a tostring numpy array
+        """
+        if not self._feng_config:
+            return ("fail", "No F-engine config set")
+        try:
+            gains = cPickle.loads(gains)
+        except Exception as error:
+            return ("fail", "Could not parse gain pickle: {}".format(str(error)))
+        try:
+            self._gain_buffer_ctrl.set_gains(gains)
+        except Exception as error:
+            return ("fail", str(error))
+        return ("ok",)
+
+    @request(Str(), Float(), Float(), Float(), Str())
+    @return_reply()
+    def request_trigger_tb_dump(self, req, utc_start, width, dm, ref_freq, trigger_id):
+        """
+        @brief      Request that the transient buffer be dumped
+
+        @param      req         The request object
+        @param      utc_start   The utc start (as ISO-8601 UTC)
+        @param      width       The width of the event in seconds
+        @param      dm          The dispersion measure in pccm
+        @param      ref_freq    The reference frequency in Hz
+        @param      trigger_id  A unique trigger identifier
+        """
+        log.info("Received request for transient buffer capture")
+        log.info("Event parameters: {}, {}, {}, {}, {}".format(utc_start, width, dm, ref_freq, trigger_id))
+        if not self._transient_buffer:
+            log.error("Buffer dump requested but no active transient buffer")
+            return ("ok", "failed to dump buffer: no transient buffer active")
+        else:
+            ts = datetime.datetime.strptime(utc_start, '%Y-%m-%dT%H:%M:%S.%f')
+            unix_time = time.mktime(ts.timetuple()) + float(utc_start.split(".")[-1]) * 1e-6
+            try:
+                self._transient_buffer.trigger(unix_time, unix_time+width, dm, ref_freq, trigger_id)
+            except Exception as error:
+                log.exception("Failed to trigger transient buffer with error: {}".format(str(error)))
+                return ("fail", str(error))
         return ("ok",)
 
     @request(Str(), Int(), Int(), Float(), Float(), Str(), Str(),
@@ -449,6 +546,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         log.info("Preparing worker server instance")
         try:
             feng_config = json.loads(feng_config)
+            self._feng_config = feng_config
         except Exception as error:
             msg = ("Unable to parse F-eng config with "
                    "error: {}").format(str(error))
@@ -519,7 +617,7 @@ class FbfWorkerServer(AsyncDeviceServer):
             # Coherent beam timestamps
             coh_heap_size = 8192
             nsamps_per_coh_heap = (coh_heap_size / (partition_nchans
-                                   * coherent_beam_config['fscrunch']))
+                                   / coherent_beam_config['fscrunch']))
             coh_timestamp_step = (coherent_beam_config['tscrunch']
                                   * nsamps_per_coh_heap
                                   * 2 * feng_config["nchans"])
@@ -527,14 +625,14 @@ class FbfWorkerServer(AsyncDeviceServer):
             # Incoherent beam timestamps
             incoh_heap_size = 8192
             nsamps_per_incoh_heap = (incoh_heap_size / (partition_nchans
-                                     * incoherent_beam_config['fscrunch']))
+                                     / incoherent_beam_config['fscrunch']))
             incoh_timestamp_step = (incoherent_beam_config['tscrunch']
                                     * nsamps_per_incoh_heap * 2
                                     * feng_config["nchans"])
 
             timestamp_modulus = lcm(timestamp_step,
                                     lcm(incoh_timestamp_step,
-                                        coh_timestamp_step))
+                                        coh_timestamp_step)) * 4
 
             if self._exec_mode == FULL:
                 dada_mode = 4
@@ -550,7 +648,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                 'mcast_port': capture_range.port,
                 'interface': self._capture_interface,
                 'timestamp_step': timestamp_step,
-                'timestamp_modulus': timestamp_modulus,
+                'timestamp_modulus': timestamp_modulus/timestamp_step,
                 'ordered_feng_ids_csv': ",".join(
                     map(str, feng_capture_order_info['order'])),
                 'frequency_partition_ids_csv': ",".join(
@@ -586,8 +684,9 @@ class FbfWorkerServer(AsyncDeviceServer):
             heap_id_start = worker_idx * coh_ip_range.count
             log.debug("Determining MKSEND configuration for coherent beams")
             dada_mode = int(self._exec_mode == FULL)
-            coherent_mcast_dest = coherent_beam_config['destination'].lstrip(
-                "spead://").split(":")[0]
+            #coherent_mcast_dest = coherent_beam_config['destination'].lstrip(
+            #    "spead://").split(":")[0]
+            coherent_mcast_dest = ",".join(map(str, coh_ip_range))
             mksend_coh_config = {
                 'dada_key': self._dada_coh_output_key,
                 'dada_mode': dada_mode,
@@ -602,7 +701,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                 'timestamp_step': coh_timestamp_step,
                 'beam_ids': "0:{}".format(nbeams),
                 'multibeam': True,
-                'subband_idx': chan0_idx,
+                'subband_idx': chan0_idx / coherent_beam_config['fscrunch'],
                 'heap_group': nbeams_per_group
             }
             mksend_coh_header = make_mksend_header(
@@ -634,7 +733,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                 'timestamp_step': incoh_timestamp_step,
                 'beam_ids': 0,
                 'multibeam': False,
-                'subband_idx': chan0_idx,
+                'subband_idx': chan0_idx / incoherent_beam_config['fscrunch'],
                 'heap_group': 1
             }
             mksend_incoh_header = make_mksend_header(
@@ -666,6 +765,12 @@ class FbfWorkerServer(AsyncDeviceServer):
             psrdada_compilation_future = compile_psrdada_cpp(
                 fbfuse_pipeline_params)
 
+            self._tb_params['total_nantennas'] = len(feng_capture_order_info['order'])
+            self._tb_params['total_nchans'] = feng_config['nchans']
+            self._tb_params['partition_nchans'] = partition_nchans
+            self._tb_params['partition_bw'] = self._partition_bandwidth
+            self._tb_params['partition_cfreq'] = self._centre_frequency
+
             log.info("Creating all DADA buffers")
             # Create capture data DADA buffer
             capture_block_size = ngroups_data * heap_group_size
@@ -675,7 +780,7 @@ class FbfWorkerServer(AsyncDeviceServer):
                 "%s" % self._dada_input_key))
             input_make_db_future = self._make_db(
                 self._dada_input_key, capture_block_size,
-                capture_block_count)
+                capture_block_count, nreaders=2)
 
             # Create coherent beam output DADA buffer
             coh_output_channels = (ngroups * nchans_per_group) / \
@@ -713,6 +818,15 @@ class FbfWorkerServer(AsyncDeviceServer):
                 'order'][cstart:cend]
             coherent_beam_antenna_capture_order = [feng_to_antenna_map[
                 idx] for idx in coherent_beam_feng_capture_order]
+
+            nants = len(feng_capture_order_info['order'])
+            antenna_capture_order = [feng_to_antenna_map[
+                idx] for idx in feng_capture_order_info['order']]
+            self._gain_buffer_ctrl = GainBufferController(
+                nants, partition_nchans, 2,
+                antenna_capture_order)
+            self._gain_buffer_ctrl.create()
+            self._gain_buffer_ctrl.update_gains()
 
             # Start DelayBufferController instance
             # Here we are going to make the assumption that the server and processing all run in
@@ -785,6 +899,8 @@ class FbfWorkerServer(AsyncDeviceServer):
             log.info("Destroying delay buffers")
             del self._delay_buf_ctrl
             self._delay_buf_ctrl = None
+            del self._gain_buffer_ctrl
+            self._gain_buffer_ctrl = None
             self._state_sensor.set_value(self.IDLE)
             log.info("Deconfigure request successful")
             req.reply("ok",)
@@ -825,11 +941,13 @@ class FbfWorkerServer(AsyncDeviceServer):
         if self._numa == 0:
             mksend_cpu_set = "7"
             psrdada_cpp_cpu_set = "6"
-            mkrecv_cpu_set = "0-5"
+            mkrecv_cpu_set = "0-4"
+            tb_core = "5"
         else:
             mksend_cpu_set = "14"
             psrdada_cpp_cpu_set = "15"
-            mkrecv_cpu_set = "8-13"
+            mkrecv_cpu_set = "8-12"
+            tb_core = "13"
 
         self._mksend_coh_proc = ManagedProcess(
             ["taskset", "-c", mksend_cpu_set, "mksend", "--header",
@@ -842,6 +960,7 @@ class FbfWorkerServer(AsyncDeviceServer):
         # Start beamforming pipeline
         log.info("Starting PSRDADA_CPP beamforming pipeline")
         delay_buffer_key = self._delay_buf_ctrl.shared_buffer_key
+        gain_buffer_key = self._gain_buffer_ctrl.shared_buffer_key
         # Start beamformer instance
         psrdada_cpp_cmdline = [
             "taskset", "-c", psrdada_cpp_cpu_set,
@@ -850,22 +969,36 @@ class FbfWorkerServer(AsyncDeviceServer):
             "--cb_key", self._dada_coh_output_key,
             "--ib_key", self._dada_incoh_output_key,
             "--delay_key_root", delay_buffer_key,
+            "--gain_key_root", gain_buffer_key,
+            "--level_trigger_sem", self._autoscaling_key,
+            "--output_level", self._output_level,
             "--cfreq", self._centre_frequency,
             "--bandwidth", self._partition_bandwidth,
-            "--input_level", self._input_level,
-            "--output_level", self._output_level,
             "--log_level", "info"]
         self._psrdada_cpp_args_sensor.set_value(
             " ".join(map(str, psrdada_cpp_cmdline)))
         log.debug(" ".join(map(str, psrdada_cpp_cmdline)))
         self._psrdada_cpp_proc = ManagedProcess(psrdada_cpp_cmdline)
+        time.sleep(1)
+        self._transient_buffer = TransientBuffer(
+            self._dada_input_key,
+            self._tb_params['total_nantennas'],
+            self._tb_params['partition_nchans'],
+            self._tb_params['partition_cfreq'],
+            self._tb_params['partition_bw'],
+            self._tb_params['total_nchans'],
+            socket_name="/tmp/tb_trigger.sock",
+            output_dir="/transient_buffer_output/",
+            fill_level=0.8
+            )
+        self._transient_buffer.start(core=tb_core)
 
         def update_heap_loss_sensor(curr, total, avg, window):
             self._mkrecv_heap_loss.set_value(100.0 - avg)
 
         # Create SPEAD receiver for incoming antenna voltages
         self._mkrecv_proc = ManagedProcess(
-            ["taskset", "-c", mkrecv_cpu_set, "mkrecv_nt", "--header",
+            ["taskset", "-c", mkrecv_cpu_set, "mkrecv_v4", "--header",
              MKRECV_CONFIG_FILENAME, "--quiet"],
             stdout_handler=MkrecvStdoutHandler(
                 callback=update_heap_loss_sensor))
@@ -888,22 +1021,29 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._capture_monitor = PeriodicCallback(exit_check_callback, 1000)
         self._capture_monitor.start()
 
-        def dada_callback(params):
-            self._ingress_buffer_percentage.set_value(params["fraction-full"])
-
         # start DB monitors
         self._ingress_buffer_monitor = DbMonitor(
             self._dada_input_key,
-            callback=dada_callback)
+            callback=lambda params:
+            self._ingress_buffer_percentage.set_value(
+                params["fraction-full"]),
+            reader=0)
         self._ingress_buffer_monitor.start()
-        self._cb_egress_buffer_monitor = DbMonitor(
+        self._transient_buffer_monitor = DbMonitor(
             self._dada_input_key,
+            callback=lambda params:
+            self._transient_buffer_percentage.set_value(
+                params["fraction-full"]),
+            reader=1)
+        self._transient_buffer_monitor.start()
+        self._cb_egress_buffer_monitor = DbMonitor(
+            self._dada_coh_output_key,
             callback=lambda params:
             self._cb_egress_buffer_percentage.set_value(
                 params["fraction-full"]))
         self._cb_egress_buffer_monitor.start()
         self._ib_egress_buffer_monitor = DbMonitor(
-            self._dada_input_key,
+            self._dada_incoh_output_key,
             callback=lambda params:
             self._ib_egress_buffer_percentage.set_value(
                 params["fraction-full"]))
@@ -948,12 +1088,16 @@ class FbfWorkerServer(AsyncDeviceServer):
         self._state_sensor.set_value(self.STOPPING)
         self._capture_monitor.stop()
         self._ingress_buffer_monitor.stop()
+        self._transient_buffer_monitor.stop()
         self._cb_egress_buffer_monitor.stop()
         self._ib_egress_buffer_monitor.stop()
         log.info("Stopping MKRECV instance")
         self._mkrecv_proc.terminate()
         log.info("Stopping PSRDADA_CPP instance")
         self._psrdada_cpp_proc.terminate()
+        log.info("Stopping transient buffer instance")
+        self._transient_buffer.stop()
+        self._transient_buffer = None
         log.info("Stopping MKSEND instances")
         self._mksend_incoh_proc.terminate()
         self._mksend_coh_proc.terminate()

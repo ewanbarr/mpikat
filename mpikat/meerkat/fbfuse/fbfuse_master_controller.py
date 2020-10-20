@@ -28,7 +28,7 @@ import time
 import cPickle
 from threading import Lock
 from optparse import OptionParser
-from tornado.gen import Return, coroutine
+from tornado.gen import coroutine, Return
 from katcp import Sensor, AsyncReply
 from katcp.kattypes import request, return_reply, Int, Str, Float
 from katpoint import Antenna, Target
@@ -36,7 +36,8 @@ from mpikat.core.master_controller import (
     MasterController, ProductLookupError, ProductExistsError)
 from mpikat.core.ip_manager import IpRangeManager, ip_range_from_stream
 from mpikat.core.utils import parse_csv_antennas
-from mpikat.meerkat.katportalclient_wrapper import KatportalClientWrapper
+from mpikat.meerkat.katportalclient_wrapper import (
+    KatportalClientWrapper, SubarrayActivity)
 from mpikat.meerkat.fbfuse import FbfWorkerPool, FbfProductController
 from mpikat.meerkat.test.antennas import ANTENNAS as DEFAULT_ANTENNA_MODELS
 from mpikat.meerkat.fbfuse.fbfuse_feng_subscription_manager import (
@@ -50,6 +51,7 @@ lock = Lock()
 FBF_IP_RANGE = "spead://239.11.1.0+127:7147"
 CONFIG_PICKLE_FILE = "/tmp/fbfuse_config.pickle"
 VALID_NCHANS = [1024, 4096, 32768]
+
 
 class FbfMasterController(MasterController):
     """This is the main KATCP interface for the FBFUSE
@@ -80,7 +82,7 @@ class FbfMasterController(MasterController):
         super(FbfMasterController, self).__init__(ip, port, FbfWorkerPool())
         self._dummy = dummy
         if self._dummy:
-            for ii in range(64):
+            for ii in range(0):
                 self._server_pool.add("127.0.0.1", 50000+ii)
         self._last_configure_arguments = None
         self._feng_subscription_manager = FengToFbfMapper()
@@ -325,9 +327,12 @@ class FbfMasterController(MasterController):
         }
         for key, value in feng_config.items():
             log.debug("{}: {}".format(key, value))
+
+        log.info("Starting subarray activity tracker")
         product = FbfProductController(
             self, product_id, observers, n_channels,
-            feng_groups, proxy_name, feng_config)
+            feng_groups, proxy_name, feng_config,
+            streams['cam.http']['camdata'], self._katportal_wrapper_type)
         self._products[product_id] = product
         self._update_products_sensor()
         log.debug("Configured FBFUSE instance with ID: {}".format(product_id))
@@ -443,19 +448,13 @@ class FbfMasterController(MasterController):
         except ProductLookupError as error:
             log.error("target-start request failed with error: {}".format(
                 str(error)))
-            raise Return(("fail", str(error)))
+            raise Return("fail", str(error))
         try:
             target = Target(target)
         except Exception as error:
-            log.exception("Target could not be parsed: {}".format(
-                str(error)))
             raise Return(("fail", str(error)))
-        try:
-            yield product.target_start(target)
-        except Exception as error:
-            log.exception("Target start failed with error: {}".format(
-                str(error)))
-        log.info("Target-start request successful")
+        yield product.target_start(target)
+        yield product.rescale()
         raise Return(("ok",))
 
     @request(Str())
@@ -595,9 +594,9 @@ class FbfMasterController(MasterController):
         log.info("Set-configuration-authority request successful")
         return ("ok",)
 
-    @request(Str(), Float(), Float())
+    @request(Str(), Float())
     @return_reply()
-    def request_set_levels(self, req, product_id, input_level, output_level):
+    def request_set_levels(self, req, product_id, output_level):
         """
         @brief    Set the input and output levels for FBFUSE
 
@@ -606,9 +605,6 @@ class FbfMasterController(MasterController):
         @param      product_id      This is a name for the data product, used
                                     to track which subarray is being
                                     deconfigured. For example "array_1_bc856M4k".
-
-        @param    input_level  The standard deviation of the data
-                               from the F-engines.
 
         @param    output_level  The standard deviation of the data
                                 output from FBFUSE.
@@ -624,7 +620,7 @@ class FbfMasterController(MasterController):
         @coroutine
         def set_levels_wrapper():
             try:
-                yield product.set_levels(input_level, output_level)
+                yield product.set_levels(output_level)
             except Exception as error:
                 log.exception("set-levels request failed: {}".format(
                     str(error)))
@@ -800,6 +796,188 @@ class FbfMasterController(MasterController):
         product.add_tiling(target, nbeams-1, 1.4e9, 0.5, now)
         product.add_beam(target)
         return ("ok",)
+
+    @request()
+    @return_reply()
+    def request_register_default_worker_servers(self, req):
+        """
+        @brief      Add default FBFUSE nodes to the server pool
+        """
+        for idx in range(32):
+            self._server_pool.add("fbfpn{:02d}.mpifr-be.mkat.karoo.kat.ac.za".format(idx), 6000)
+            self._server_pool.add("fbfpn{:02d}.mpifr-be.mkat.karoo.kat.ac.za".format(idx), 6001)
+        return ("ok",)
+
+    @request(Str())
+    @return_reply(Str())
+    def request_beam_positions(self, req, product_id):
+        """
+        @brief      Get all beam information for a given product
+        """
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            return ("fail", str(error))
+        beam_dict = {}
+        beams = product._beam_manager.get_beams()
+        for beam in beams:
+            beam_dict[beam.idx] = beam.target.format_katcp()
+        return ("ok", json.dumps(beam_dict))
+
+    @request(Str())
+    def request_rescale(self, req, product_id):
+        """
+        @brief      Request rescaling of FBFUSE channels
+        """
+        @coroutine
+        def wrapper():
+            try:
+                yield product.rescale()
+            except Exception as error:
+                req.reply("fail", str(error))
+            else:
+                req.reply("ok",)
+
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            req.reply("fail", str(error))
+        else:
+            self.ioloop.add_callback(wrapper)
+        raise AsyncReply
+
+    @request(Str(), Str(), Float(), Float(), Float(), Str())
+    def request_trigger_tb_dump(self, req, product_id, utc_start, width, dm, ref_freq, trigger_id):
+        """
+        @brief   Request a transient buffer dump on the FBFUSE nodes
+
+        @param      req         The request object
+        @param      product_id  The product identifier
+        @param      utc_start   The utc start (as ISO-8601 UTC)
+        @param      width       The width of the event in seconds
+        @param      dm          The dispersion measure in pccm
+        @param      ref_freq    The reference frequency in Hz
+        @param      trigger_id  A unique trigger identifier
+        """
+        @coroutine
+        def wrapper():
+            try:
+                yield product.trigger_tb_dump(
+                    utc_start, width, dm, ref_freq, trigger_id)
+            except Exception as error:
+                log.exception("Failed to run trigger dump: {}".format(str(error)))
+                req.reply("fail", str(error))
+            else:
+                req.reply("ok",)
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            req.reply("fail", str(error))
+        else:
+            self.ioloop.add_callback(wrapper)
+        raise AsyncReply
+
+    @request(Str())
+    def request_apply_default_complex_gains(self, req, product_id):
+        """
+        Sets the default complex gains (1.0).
+
+        @param      req         The request object
+        @param      product_id  The product identifier
+        """
+        @coroutine
+        def wrapper():
+            try:
+                yield product.apply_default_complex_gains()
+            except Exception as error:
+                log.exception("Failed to set default complex gains: {}".format(
+                    str(error)))
+                req.reply("fail", str(error))
+            else:
+                req.reply("ok",)
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            req.reply("fail", str(error))
+        else:
+            self.ioloop.add_callback(wrapper)
+        raise AsyncReply
+
+    @request(Str())
+    def request_apply_telstate_complex_gains(self, req, product_id):
+        """
+        Sets the complex gains to the latest solution in telstate.
+
+        @param      req         The request object
+        @param      product_id  The product identifier
+        """
+        @coroutine
+        def wrapper():
+            try:
+                yield product.apply_telstate_complex_gains()
+            except Exception as error:
+                log.exception("Failed to set default complex gains: {}".format(
+                    str(error)))
+                req.reply("fail", str(error))
+            else:
+                req.reply("ok",)
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            req.reply("fail", str(error))
+        else:
+            self.ioloop.add_callback(wrapper)
+        raise AsyncReply
+
+    @request(Str(), Str(), Str())
+    @return_reply()
+    def request_set_antenna_weights(self, req, product_id, antenna, weights_csv):
+        """
+        @brief      Sets the antenna weights.
+
+        @param      req           The request object
+        @param      product_id    The product identifier
+        @param      antenna       The antenna name to set the weights for
+                                  (e.g. m001)
+        @param      weights_csv   Scalar weights either as a single value
+                                  of vector of per channel weights
+
+        @note   These weights are only applied on a complex gain application
+        """
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            return ("fail", str(error))
+        try:
+            weights = list(map(float, weights_csv.split(",")))
+            product.set_antenna_weights(antenna, weights)
+        except Exception as error:
+            log.exception(str(error))
+            return ("fail", str(error))
+        else:
+            return ("ok",)
+
+    @request(Str())
+    @return_reply()
+    def request_reset_antenna_weights(self, req, product_id):
+        """
+        @brief      Reset the antenna weights to unity.
+
+        @param      req         The request object
+        @param      product_id  The product identifier
+        @note       These weights are only applied on a complex gain application
+        """
+        try:
+            product = self._get_product(product_id)
+        except ProductLookupError as error:
+            return ("fail", str(error))
+        try:
+            product.reset_antenna_weights()
+        except Exception as error:
+            log.exception(str(error))
+            return ("fail", str(error))
+        else:
+            return ("ok",)
 
 
 @coroutine

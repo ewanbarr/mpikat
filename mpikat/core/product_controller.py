@@ -151,6 +151,15 @@ class ProductController(object):
         self._managed_sensors = []
         self._parent.mass_inform(Message.inform('interface-changed'))
 
+    @coroutine
+    def reset_workers(self):
+        for server in self.servers:
+            try:
+                yield server.reset()
+            except Exception as error:
+                log.exception("Could not reset worker '{}' with error: {}".format(
+                    str(server), str(error)))
+
     @property
     def servers(self):
         return self._servers

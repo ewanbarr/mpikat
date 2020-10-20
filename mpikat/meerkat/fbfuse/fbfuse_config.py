@@ -23,7 +23,7 @@ import logging
 from math import floor, ceil
 from mpikat.core.utils import next_power_of_two, lcm, next_multiple
 
-log = logging.getLogger('')
+log = logging.getLogger('mpikat.fbfuse_config')
 
 
 FBF_BEAM_NBITS = 8
@@ -34,6 +34,7 @@ MIN_MCAST_GROUPS = 32
 MIN_NBEAMS = 32
 MIN_ANTENNAS = 4
 NBEAM_GRANULARITY = 32
+
 
 class FbfConfigurationError(Exception):
     pass
@@ -74,7 +75,7 @@ class FbfConfigurationManager(object):
             scale = 1.0 + 1.0 / scrunch
         else:
             scale = 1.0
-        nbeams = int(864.0 * (self.total_nchans / (self.nchans_per_worker * 64.0)) * (64.0/nantennas) / scale)
+        nbeams = int(864.0 * (self.total_nchans / (self.nchans_per_worker * 64.0)) * (64.0 / nantennas) / scale)
         nbeams -= nbeams%32
         return nbeams
 
@@ -218,7 +219,11 @@ class FbfConfigurationManager(object):
         max_valid_nbeam_per_mcast_idx = len(valid_nbeam_per_mcast)-1
         log.info("Max valid numbers of beams per multicast group: {}".format(max_valid_nbeam_per_mcast))
 
-        num_mcast_required_per_worker_set = int(floor(num_beams_per_worker_set / float(max_valid_nbeam_per_mcast)))
+        num_mcast_required_per_worker_set = int(
+            floor(
+                num_beams_per_worker_set / float(
+                    max_valid_nbeam_per_mcast
+                    )))
         log.info("Number of multicast groups required per worker set: {}".format(num_mcast_required_per_worker_set))
 
         num_mcast_required = num_mcast_required_per_worker_set * num_worker_sets_to_be_used
@@ -238,20 +243,20 @@ class FbfConfigurationManager(object):
         final_nbeams = next_multiple(group_corrected_nbeams, lcm(
             NBEAM_GRANULARITY, max_valid_nbeam_per_mcast))
         final_num_mcast = final_nbeams // max_valid_nbeam_per_mcast
-        if final_nbeams % num_worker_sets_to_be_used !=0:
+        if final_nbeams % num_worker_sets_to_be_used != 0:
             raise Exception(
                 "Error during configuration, expected number of "
                 "beams ({}) to be a multiple of number of worker sets ({})".format(
                     final_nbeams, num_worker_sets_to_be_used))
         num_beams_per_worker_set = final_nbeams / num_worker_sets_to_be_used
         config = {
-            "num_beams":final_nbeams,
-            "num_chans":nchans,
-            "num_mcast_groups":final_num_mcast,
-            "num_beams_per_mcast_group":max_valid_nbeam_per_mcast,
-            "num_workers_per_set":min_num_workers,
-            "num_worker_sets":num_worker_sets_to_be_used,
-            "num_workers_total":num_worker_sets_to_be_used*min_num_workers,
+            "num_beams": final_nbeams,
+            "num_chans": nchans,
+            "num_mcast_groups": final_num_mcast,
+            "num_beams_per_mcast_group": max_valid_nbeam_per_mcast,
+            "num_workers_per_set": min_num_workers,
+            "num_worker_sets": num_worker_sets_to_be_used,
+            "num_workers_total": num_worker_sets_to_be_used*min_num_workers,
             "num_beams_per_worker_set": num_beams_per_worker_set,
             "data_rate_per_group": rate_per_beam * max_valid_nbeam_per_mcast,
             "used_bandwidth": bandwidth

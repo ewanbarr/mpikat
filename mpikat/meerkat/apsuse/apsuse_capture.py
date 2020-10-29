@@ -17,7 +17,7 @@ from mpikat.utils.unix_socket import UDSClient
 
 AVAILABLE_CAPTURE_MEMORY = 3221225472 * 10
 MAX_DADA_BLOCK_SIZE = 1 << 30
-OPTIMAL_BLOCK_LENGTH = 10.0  # seconds
+OPTIMAL_BLOCK_LENGTH = 0.5  # seconds
 OPTIMAL_CAPTURE_BLOCKS = 96
 
 log = logging.getLogger("mpikat.apsuse_capture")
@@ -130,11 +130,13 @@ class ApsCapture(object):
         npartitions = config['nchans'] / config['nchans-per-heap']
         # desired beams here is a list of beam IDs, e.g. [1,2,3,4,5]
         heap_group_size = config['heap-size'] * nbeams * npartitions
-
-        #heap_group_duration = (heap_group_size / config['nchans-per-heap']) * config['sampling-interval']
-        #optimal_heap_groups = int(OPTIMAL_BLOCK_LENGTH / heap_group_duration)
-        #if (optimal_heap_groups * heap_group_size) > MAX_DADA_BLOCK_SIZE:
         ngroups_data = int(MAX_DADA_BLOCK_SIZE / heap_group_size)
+
+        group_duration = config['sampling-interval'] * (config['heap-size'] / config['nchans-per-heap'])
+        duration = ngroups_data * group_duration
+        if duration > OPTIMAL_BLOCK_LENGTH:
+            ngroups_data = int(OPTIMAL_BLOCK_LENGTH / group_duration)
+
         #else:
         #    ngroups_data = optimal_heap_groups
 

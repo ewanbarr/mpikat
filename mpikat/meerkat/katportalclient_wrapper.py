@@ -35,6 +35,8 @@ from katcp import Sensor
 
 logger = log = logging.getLogger('mpikat.katportalclient_wrapper')
 
+PHASE_UP_WAIT_TIME = 64.0
+
 
 class SDPWideProductNotFound(Exception):
     pass
@@ -475,6 +477,10 @@ class KatportalClientWrapper(object):
         val = yield self.get_telstate()
         telstate_address = "{}:{}".format(*eval(val))
         last_calibration = yield self.get_last_calibration_timestamp()
+        now = time.time()
+        while (now - last_calibration) < PHASE_UP_WAIT_TIME:
+            log.info("Waiting for phasing solution to become available")
+            yield sleep(1)
         telstate = katsdptelstate.TelescopeState(telstate_address)
         corrections = get_phaseup_corrections(
             telstate,
@@ -680,9 +686,6 @@ def simple_activity_wait(host, state, interrupt):
         host,
         on_update_callback=None,
         logger=logging.getLogger('katcp'))
-    #namespace = 'namespace_' + str(uuid.uuid4())
-    #NOTE: Commenting this out based on comment seen in examples for katportal 
-    #yield client.connect()
     full_sensor_name = yield client.sensor_subarray_lookup(
             component=component, sensor=sensor_name,
             return_katcp_name=False)
@@ -696,7 +699,6 @@ def simple_activity_wait(host, state, interrupt):
             break
         else:
             yield sleep(1)
-    #yield client.disconnect()
 
 
 if __name__ == "__main__":
@@ -712,3 +714,5 @@ if __name__ == "__main__":
         yield client.get_telstate()
 
     ioloop.run_sync(setup)
+
+

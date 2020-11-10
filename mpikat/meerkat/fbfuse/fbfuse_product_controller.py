@@ -1148,9 +1148,7 @@ class FbfProductController(object):
                 log.exception(
                     "Error when setting telstate gains on server {}: {}".format(
                         self._servers[ii], str(error)))
-	yield self.rescale()
-
-
+        yield self.rescale()
 
     @coroutine
     def apply_default_complex_gains(self):

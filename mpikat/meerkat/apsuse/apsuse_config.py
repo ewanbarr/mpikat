@@ -25,7 +25,7 @@ from mpikat.core.ip_manager import ip_range_from_stream
 
 log = logging.getLogger('mpikat.apsuse_config_manager')
 
-DEFAULT_DATA_RATE_PER_WORKER = 20e9  # bits / s
+DEFAULT_DATA_RATE_PER_WORKER = 20000000000.0  # bits / s
 
 DUMMY_FBF_CONFIG = {
     "coherent-beam-multicast-groups":"spead://239.11.1.15+15:7147",

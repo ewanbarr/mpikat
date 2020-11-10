@@ -23,6 +23,7 @@ import logging
 import json
 import signal
 import coloredlogs
+import os
 from optparse import OptionParser
 from tornado.gen import coroutine, Return
 from tornado.ioloop import IOLoop
@@ -303,6 +304,21 @@ class ApsWorkerServer(AsyncDeviceServer):
         self._state_sensor.set_value(self.RECORDING)
         log.info("Target start successful")
         return ("ok",)
+
+    @request()
+    def request_reset(self, req):
+        """
+        @brief    Request the docker container housing this server gets restarted
+
+        @detail   This is an apocalyptic command that will erase the state of the
+                  current instance completely and reset it back to fresh
+        """
+        # First get the docker container ID
+        with open("/proc/self/cgroup", "r") as f:
+            line = f.readline()
+            idx = line.split("/")[-1].strip()
+        req.reply("ok",)
+        os.system("docker restart {}".format(idx))
 
     @request()
     @return_reply()

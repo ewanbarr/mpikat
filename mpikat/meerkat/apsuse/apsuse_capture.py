@@ -130,21 +130,26 @@ class ApsCapture(object):
         npartitions = config['nchans'] / config['nchans-per-heap']
         # desired beams here is a list of beam IDs, e.g. [1,2,3,4,5]
         heap_group_size = config['heap-size'] * nbeams * npartitions
+        log.info("Heap group size: {}".format(heap_group_size))
         ngroups_data = int(MAX_DADA_BLOCK_SIZE / heap_group_size)
-
+        log.info("Max groups per block: {}".format(ngroups_data))
         group_duration = config['sampling-interval'] * (config['heap-size'] / config['nchans-per-heap'])
+        log.info("Heap group duration: {} seconds".format(group_duration))
         duration = ngroups_data * group_duration
+        log.info("Proposed block duration: {} seconds".format(duration))
         if duration > OPTIMAL_BLOCK_LENGTH:
+            log.info("Duration exceeds optimal block length")
             ngroups_data = int(OPTIMAL_BLOCK_LENGTH / group_duration)
-
-        #else:
-        #    ngroups_data = optimal_heap_groups
+            log.info("Revising number of groups per block to {}".format(ngroups_data))
 
         # Move to power of 2 heap groups (not necessary, but helpful)
         ngroups_data = 2**((ngroups_data-1).bit_length())
 
         # Make sure at least 8 groups used
         ngroups_data = max(ngroups_data, 8)
+
+        duration = ngroups_data * group_duration
+        log.info("Accepted block duration: {} seconds".format(duration))
 
         # Make DADA buffer and start watchers
         log.info("Creating capture buffer")
@@ -155,7 +160,7 @@ class ApsCapture(object):
                 raise Exception("Cannot allocate more than 2 capture blocks")
         else:
             capture_block_count = OPTIMAL_CAPTURE_BLOCKS
-
+        log.info("Using {} capture blocks".format(capture_block_count))
         log.debug("Creating dada buffer for input with key '{}'".format(
             "%s" % self._dada_input_key))
         yield self._start_db(self._dada_input_key, capture_block_size,

@@ -25,7 +25,7 @@ import time
 import os
 import json
 from copy import deepcopy
-from tornado.gen import coroutine
+from tornado.gen import coroutine, Return, sleep
 from tornado.locks import Event
 from katcp import Sensor, Message
 from mpikat.core.worker_pool import WorkerAllocationError
@@ -162,7 +162,7 @@ class ApsProductController(object):
         self._data_rate_per_worker_sensor = Sensor.float(
             "data-rate-per-worker",
             description="The maximum ingest rate per APSUSE worker server",
-            default=6e9,
+            default=20000000000.0,
             unit="bits/s",
             initial_status=Sensor.NOMINAL)
         self.add_sensor(self._data_rate_per_worker_sensor)
@@ -556,9 +556,28 @@ class ApsProductController(object):
                 server = self._worker_config_map.keys()[ii]
                 self.log.exception("Failed to deconfigure worker {}: {}".format(
                     server, str(error)))
+
+        yield self.reset_workers(self._worker_config_map.keys())
         self._parent._server_pool.deallocate(self._worker_config_map.keys())
         self.log.info("Deallocated all servers")
         self._worker_config_map = {}
         self._servers_sensor.set_value("")
         self._state_sensor.set_value(self.READY)
+
+    @coroutine
+    def reset_workers(self, workers, timeout=60.0):
+        for server in workers:
+            try:
+                yield server.reset()
+            except Exception as error:
+                log.exception("Could not reset worker '{}' with error: {}".format(
+                    str(server), str(error)))
+        start = time.time()
+        while time.time() < start + timeout:
+            if all([server.is_connected() for server in workers]):
+                raise Return()
+            else:
+                yield sleep(1)
+        log.warning("Not all servers reset within {} second timeout".format(
+            timeout))
 

@@ -637,9 +637,9 @@ class FbfProductController(object):
             timeout))
 
     @coroutine
-    def get_sb_configuration(self, sb_id):
+    def get_sb_configuration(self, sb_id, mkat_pid):
         if self._ca_client:
-            config = yield self.get_ca_sb_configuration(sb_id)
+            config = yield self.get_ca_sb_configuration(sb_id, mkat_pid)
         else:
             self.log.warning(
                 "No configuration authority found, "
@@ -648,12 +648,13 @@ class FbfProductController(object):
         raise Return(config)
 
     @coroutine
-    def get_ca_sb_configuration(self, sb_id):
+    def get_ca_sb_configuration(self, sb_id, mkat_pid):
         self.log.debug(("Retrieving schedule block configuration"
                         " from configuration authority"))
         yield self._ca_client.until_synced(timeout=30.0)
         try:
-            response = yield self._ca_client.req.get_schedule_block_configuration(self._product_id, sb_id, self._n_channels, timeout=40.0)
+            response = yield self._ca_client.req.get_schedule_block_configuration(
+                self._product_id, sb_id, mkat_pid, self._n_channels, self._kpc_url, timeout=40.0)
         except Exception as error:
             self.log.error(
                 "Request for SB configuration to CA failed with error: {}".format(str(error)))
@@ -1187,9 +1188,17 @@ class FbfProductController(object):
         self.log.info("Preparing FBFUSE product")
         self._state_sensor.set_value(self.PREPARING)
         self.log.debug("Product moved to 'preparing' state")
+
+        try:
+            kpc = self._katportal_wrapper_type(self._kpc_url)
+            mkat_pid = yield kpc.get_proposal_id()
+        except Exception as error:
+            log.exception("Unabled to look up proposal ID: {}".format(str(error)))
+            mkat_pid = "any"
+
         self._server_configs = {}
         try:
-            sb_config = yield self.get_sb_configuration(sb_id)
+            sb_config = yield self.get_sb_configuration(sb_id, mkat_pid)
         except Exception as error:
             log.exception("Failed to get SB configuration: {}".format(
                 error))

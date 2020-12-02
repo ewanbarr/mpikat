@@ -955,8 +955,13 @@ class FbfProductController(object):
 
         def ca_target_update_callback(received_timestamp, timestamp, status,
                                       value):
-            # TODO, should we really reset all the beams or should we have
-            # a mechanism to only update changed beams
+            def sanitise_request(tiling, key, default):
+                value = tiling.get(key, default)
+                if value is None:
+                    return default
+                else:
+                    return value
+
             config_dict = json.loads(value)
             self._ibc_data_suspect.set_value(True)
             self._cbc_data_suspect.set_value(True)
@@ -969,9 +974,11 @@ class FbfProductController(object):
                     log.warning(str(error))
             for tiling in config_dict.get('tilings', []):
                 # Update to default if no value
-                tiling['reference_frequency'] = tiling.get('reference_frequency', self._cfreq_sensor.value())
-                tiling['overlap'] = tiling.get('overlap', 0.5)
-                tiling['epoch'] = tiling.get('epoch', time.time())
+                tiling['target'] = sanitise_request(tiling, 'target', self._phase_reference_sensor.value())
+                tiling['reference_frequency'] = sanitise_request(tiling, 'reference_frequency', self._cfreq_sensor.value())
+                tiling['overlap'] = sanitise_request(tiling, 'overlap', 0.5)
+                tiling['epoch'] = sanitise_request(tiling, 'epoch', time.time())
+                tiling['nbeams'] = sanitise_request(tiling, 'nbeams', 288)
                 # Parse values
                 target = Target(tiling['target'])
                 freq = float(tiling['reference_frequency'])

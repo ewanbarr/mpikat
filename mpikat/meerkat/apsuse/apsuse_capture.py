@@ -3,7 +3,7 @@ import json
 import os
 import psutil
 import time
-from subprocess import Popen, PIPE
+from subprocess import Popen, PIPE, check_output
 import itertools
 from tornado.gen import coroutine, sleep
 from tornado.ioloop import IOLoop, PeriodicCallback
@@ -328,9 +328,9 @@ class ApsCapture(object):
                     log.exception("Unable to create directory {} with error {}".format(
                         beam_dir, str(error)))
                 # Now we try and set the BeeGFS storage targets for this directory
-                os.system(("/usr/local/bin/beegfsUtil --setRecordingAttrs {} "
+                log.info(check_output(("/usr/local/bin/beegfsUtil --setRecordingAttrs {} "
                            "--setStoragePool `hostname`").format(
-                          beam_dir))
+                          beam_dir), shell=True))
         if not beam_params:
             log.warning("No valid beams passed at target-start")
             return

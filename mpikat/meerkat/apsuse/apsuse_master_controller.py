@@ -196,8 +196,11 @@ class ApsMasterController(MasterController):
             # Here we include the triggers for the creation of the beegfs storage pools
             # beegfsUtil --storagePools create
             log.info("Creating storage pools")
-            output = check_output("/usr/local/bin/beegfsUtil --storagePools create -y", shell=True)
-            log.info(output)
+            try:
+                output = check_output("/usr/local/bin/beegfsUtil --storagePools create -y", shell=True)
+                log.info(output)
+            except Exception as error:
+                log.exception("Not fatal error while creating storage pools: {}".format(str(error)))
             self._update_products_sensor()
             log.info("Configured APSUSE instance with ID: {}".format(product_id))
             req.reply("ok",)

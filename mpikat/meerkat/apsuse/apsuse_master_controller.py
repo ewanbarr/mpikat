@@ -196,7 +196,7 @@ class ApsMasterController(MasterController):
             # Here we include the triggers for the creation of the beegfs storage pools
             # beegfsUtil --storagePools create
             log.info("Creating storage pools")
-            output = check_output("beegfsUtil --storagePools create -y")
+            output = check_output("/usr/local/bin/beegfsUtil --storagePools create -y", shell=True)
             log.info(output)
             self._update_products_sensor()
             log.info("Configured APSUSE instance with ID: {}".format(product_id))
@@ -230,7 +230,7 @@ class ApsMasterController(MasterController):
         # Here we can destroy all the storage pools
         # beegfsUtil --storagePools remove
         log.info("Removing storage pools")
-        output = check_output("beegfsUtil --storagePools remove -y")
+        output = check_output("/usr/local/bin/beegfsUtil --storagePools remove -y", shell=True)
         log.info(output)
 
         try:

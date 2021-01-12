@@ -308,6 +308,9 @@ class ApsCapture(object):
                 ra, dec = map(str, target.radec())
                 log.info("IDX: {}, name: {}, ra: {}, dec: {}, source: {}".format(
                     idx, beam, ra, dec, target.name))
+                if target.name == "unset":
+                    log.info("Skipping unset beam")
+                    continue
                 beam_params.append({
                         "idx": idx,
                         "name": beam,
@@ -315,6 +318,22 @@ class ApsCapture(object):
                         "ra": ra,
                         "dec": dec
                     })
+                # Here we can try making the output directory
+                # Note this is a hack to avoid putting system calls into
+                # the apsuse capture C++ code
+                beam_dir = os.path.join(output_dir, idx)
+                try:
+                    os.mkdir(beam_dir, 755)
+                except Exception as error:
+                    log.exception("Unable to create directory {} with error {}".format(
+                        beam_dir, str(error)))
+                # Now we try and set the BeeGFS storage targets for this directory
+                os.system(("/usr/local/bin/beegfsUtil --setRecordingAttrs {} "
+                           "--setStoragePool `hostname`").format(
+                          beam_dir))
+        if not beam_params:
+            log.warning("No valid beams passed at target-start")
+            return
         log.debug("Connecting to apsuse instance via socket")
         client = UDSClient(self._control_socket)
         log.debug("Sending message: {}".format(json.dumps(message_dict)))
@@ -443,3 +462,9 @@ if __name__ == "__main__":
     #incoherent_capture.target_stop()
     coherent_capture.capture_stop()
     #incoherent_capture.capture_stop()
+
+
+
+
+
+

@@ -192,6 +192,12 @@ class ApsMasterController(MasterController):
                 yield self._products[product_id].configure()
             except Exception:
                 log.exception("Error during configuration")
+
+            # Here we include the triggers for the creation of the beegfs storage pools
+            # beegfsUtil --storagePools create
+            log.info("Creating storage pools")
+            output = check_output("beegfsUtil --storagePools create -y")
+            log.info(output)
             self._update_products_sensor()
             log.info("Configured APSUSE instance with ID: {}".format(product_id))
             req.reply("ok",)
@@ -220,6 +226,13 @@ class ApsMasterController(MasterController):
             product = self._get_product(product_id)
         except ProductLookupError as error:
             return ("fail", str(error))
+
+        # Here we can destroy all the storage pools
+        # beegfsUtil --storagePools remove
+        log.info("Removing storage pools")
+        output = check_output("beegfsUtil --storagePools remove -y")
+        log.info(output)
+
         try:
             product.deconfigure()
         except Exception as error:

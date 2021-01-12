@@ -323,7 +323,7 @@ class ApsCapture(object):
                 # the apsuse capture C++ code
                 beam_dir = os.path.join(output_dir, beam)
                 try:
-                    os.mkdir(beam_dir, 755)
+                    os.mkdir(beam_dir, 0755)
                 except Exception as error:
                     log.exception("Unable to create directory {} with error {}".format(
                         beam_dir, str(error)))

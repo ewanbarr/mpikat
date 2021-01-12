@@ -321,7 +321,7 @@ class ApsCapture(object):
                 # Here we can try making the output directory
                 # Note this is a hack to avoid putting system calls into
                 # the apsuse capture C++ code
-                beam_dir = os.path.join(output_dir, idx)
+                beam_dir = os.path.join(output_dir, beam)
                 try:
                     os.mkdir(beam_dir, 755)
                 except Exception as error:

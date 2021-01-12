@@ -233,8 +233,11 @@ class ApsMasterController(MasterController):
         # Here we can destroy all the storage pools
         # beegfsUtil --storagePools remove
         log.info("Removing storage pools")
-        output = check_output("/usr/local/bin/beegfsUtil --storagePools remove -y", shell=True)
-        log.info(output)
+        try:
+            output = check_output("/usr/local/bin/beegfsUtil --storagePools remove -y", shell=True)
+            log.info(output)
+        except Exception as error:
+            log.exception("Unable to remove storage pool with error: {}".format(str(error)))
 
         try:
             product.deconfigure()

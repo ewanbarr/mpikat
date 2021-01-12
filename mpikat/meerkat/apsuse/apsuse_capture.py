@@ -328,9 +328,12 @@ class ApsCapture(object):
                     log.exception("Unable to create directory {} with error {}".format(
                         beam_dir, str(error)))
                 # Now we try and set the BeeGFS storage targets for this directory
-                log.info(check_output(("/usr/local/bin/beegfsUtil --setRecordingAttrs {} "
-                           "--setStoragePool `hostname`").format(
-                          beam_dir), shell=True))
+                try:
+                    log.info(check_output(("/usr/local/bin/beegfsUtil --setRecordingAttrs {} "
+                               "--setStoragePool `hostname`").format(
+                              beam_dir), shell=True))
+                except Exception as error:
+                    log.exception("Unable to set storage pool attributes on directory: {}".format(str(error))
         if not beam_params:
             log.warning("No valid beams passed at target-start")
             return

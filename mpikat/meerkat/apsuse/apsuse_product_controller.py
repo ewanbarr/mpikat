@@ -568,12 +568,15 @@ class ApsProductController(object):
     def reset_workers(self, workers, timeout=60.0):
         for server in workers:
             try:
+                log.debug("sending reset to {}".format(server))
                 yield server.reset()
             except Exception as error:
                 log.exception("Could not reset worker '{}' with error: {}".format(
                     str(server), str(error)))
+        yield sleep(10)
         start = time.time()
         while time.time() < start + timeout:
+            log.debug("Checking server connections")
             if all([server.is_connected() for server in workers]):
                 raise Return()
             else:

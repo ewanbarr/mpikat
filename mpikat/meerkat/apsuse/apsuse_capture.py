@@ -321,19 +321,21 @@ class ApsCapture(object):
                 # Here we can try making the output directory
                 # Note this is a hack to avoid putting system calls into
                 # the apsuse capture C++ code
-                beam_dir = os.path.join(output_dir, idx)
+                beam_dir = os.path.join(output_dir, beam)
                 try:
-                    os.mkdir(beam_dir, 755)
+                    os.mkdir(beam_dir, 0755)
                 except Exception as error:
                     log.exception("Unable to create directory {} with error {}".format(
                         beam_dir, str(error)))
                 # Now we try and set the BeeGFS storage targets for this directory
                 try:
                     log.info(check_output(("/usr/local/bin/beegfsUtil --setRecordingAttrs {} "
-                               "--setStoragePool `hostname`").format(
-                              beam_dir), shell=True))
+                                           "--setStoragePool `hostname`").format(
+                                          beam_dir), shell=True))
                 except Exception as error:
-                    log.exception("Unable to set storage pool attributes on directory: {}".format(str(error))
+                    log.exception("Unable to set storage pool attributes on directory: {}".format(
+                             	  str(error)))
+        
         if not beam_params:
             log.warning("No valid beams passed at target-start")
             return

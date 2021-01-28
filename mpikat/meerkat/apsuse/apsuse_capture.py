@@ -245,7 +245,7 @@ class ApsCapture(object):
         log.info("Starting MKRECV")
         self._mkrecv_proc = ManagedProcess(
             ["taskset", "-c", self._mkrecv_cpu_set,
-             "mkrecv_rnt", "--header",
+             "mkrecv_v4", "--header",
              self._mkrecv_config_filename, "--quiet"],
             stdout_handler=mkrecv_aggregated_output_handler,
             stderr_handler=log.error)
@@ -333,7 +333,7 @@ class ApsCapture(object):
                                "--setStoragePool `hostname`").format(
                               beam_dir), shell=True))
                 except Exception as error:
-                    log.exception("Unable to set storage pool attributes on directory: {}".format(str(error))
+                    log.exception("Unable to set storage pool attributes on directory: {}".format(str(error)))
         if not beam_params:
             log.warning("No valid beams passed at target-start")
             return

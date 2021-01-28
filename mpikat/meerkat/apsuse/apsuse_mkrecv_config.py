@@ -33,7 +33,7 @@ SAMPLE_CLOCK_START unset
 NTHREADS      {{nthreads}}
 NHEAPS        64
 HEAP_NBYTES     {{heap_size}}
-DADA_NSLOTS 4
+DADA_NSLOTS 3
 SLOTS_SKIP 8
 
 NINDICES    3
@@ -49,7 +49,10 @@ IDX3_LIST   {{freq_ids_csv}}
 """
 
 MKRECV_STDOUT_KEYS = {
-    "STAT": [("slot-size", int),
+    "STAT": [
+             ("slot-index", int),
+             ("slot-size", int),
+             ("slot-time", int),
              None,
              ("slot.heaps-completed", int),
              ("slot.heaps-discarded", int),
@@ -75,9 +78,9 @@ MKRECV_STDOUT_KEYS = {
              None,
              ("timestamp.head", int),
              ("timestamp.current", int),
-             ("timestamp.last", int)]
+             ("timestamp.last", int),
+             ("timestamp.next", int)]
 }
-
 
 class MkrecvHeaderException(Exception):
     pass
